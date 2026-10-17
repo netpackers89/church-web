@@ -1,0 +1,5 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS first_name VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS father_name VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS grandfather_name VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS profile_image_url TEXT;

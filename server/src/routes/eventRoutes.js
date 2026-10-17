@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { createEvent, deleteEvent, registerForEvent, updateEvent } from '../controllers/eventController.js';
+import { requirePermission } from '../middleware/requirePermission.js';
+import { requireUser } from '../middleware/requireUser.js';
+const router = Router();
+router.post('/:id/register', requireUser, registerForEvent);
+router.post('/', requireUser, requirePermission('events.manage'), createEvent);
+router.patch('/:id', requireUser, requirePermission('events.manage'), updateEvent);
+router.delete('/:id', requireUser, requirePermission('events.manage'), deleteEvent);
+export default router;

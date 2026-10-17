@@ -1,0 +1,95 @@
+.reg-tabs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 0.35rem;
+}
+
+.reg-tabs a,
+.reg-tabs button {
+  border: none;
+  background: transparent;
+  border-radius: var(--r-md);
+  padding: 0.6rem 1rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.reg-tabs a.active,
+.reg-tabs button.active {
+  background: var(--navy);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.reg-body {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.reg-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 1.5rem;
+}
+
+.reg-title {
+  margin: 0 0 1rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+}
+
+.reg-form {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.reg-note {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.reg-note .check {
+  margin-top: 0.15rem;
+}
+
+.reg-note-list {
+  margin: 0.75rem 0 1rem;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.reg-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+}
+
+.reg-success {
+  background: var(--paper);
+  border: 1px solid var(--success);
+  border-radius: var(--r-lg);
+  padding: 2rem;
+  text-align: center;
+}
+
+.reg-success .dot {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  margin-bottom: 0.75rem;
+}
