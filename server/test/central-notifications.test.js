@@ -24,6 +24,7 @@ test('email transport is initialized once and can be closed cleanly', async (con
 
 	const first = getEmailTransporter();
 	assert.equal(getEmailTransporter(), first);
+	assert.equal(first.options.family, 4);
 });
 
 test('Telegram document delivery uses the centralized multipart sender', async (context) => {

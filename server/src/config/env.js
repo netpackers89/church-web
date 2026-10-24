@@ -7,6 +7,13 @@ dotenv.config({ path: resolve(currentDirectory, '../../.env') });
 
 const port = Number(process.env.PORT ?? process.env.port ?? 5000);
 const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173';
+const webOrigins = [...new Set([
+	webOrigin,
+	'http://localhost:5173',
+	...(process.env.WEB_ORIGINS ?? '').split(',').map((origin) => origin.trim()).filter(Boolean),
+])];
+const cookieSameSite = (process.env.COOKIE_SAME_SITE
+	?? (process.env.NODE_ENV === 'production' ? 'none' : 'lax')).toLowerCase();
 const bundledChurchLogoUrl = new URL('/mulu%20wengel%20logo.png', webOrigin).href;
 const pgSslValue = process.env.PGSSL?.toLowerCase();
 const pgSslRejectUnauthorizedValue = process.env.PGSSL_REJECT_UNAUTHORIZED?.toLowerCase();
@@ -14,10 +21,15 @@ const pgSslRejectUnauthorizedValue = process.env.PGSSL_REJECT_UNAUTHORIZED?.toLo
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
 	throw new Error('PORT must be a valid TCP port number.');
 }
+if (!['strict', 'lax', 'none'].includes(cookieSameSite)) {
+	throw new Error('COOKIE_SAME_SITE must be strict, lax, or none.');
+}
 
 export const config = {
 	port,
 	webOrigin,
+	webOrigins,
+	cookieSameSite,
 	jwtSecret: process.env.JWT_SECRET,
 	telegramWebhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
 	telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,

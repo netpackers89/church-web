@@ -57,8 +57,8 @@ function validateLocation(location, otherLocation, allowedLocations = LOCATION_O
 function cookieOptions() {
 	return {
 		httpOnly: true,
-		secure: process.env.NODE_ENV === 'production',
-		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production' || config.cookieSameSite === 'none',
+		sameSite: config.cookieSameSite,
 		path: '/',
 		maxAge: 7 * 24 * 60 * 60 * 1000,
 	};

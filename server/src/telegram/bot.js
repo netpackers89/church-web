@@ -24,6 +24,7 @@ let botStarted = false;
 let pollingStarting = false;
 let stopping = false;
 let pollingClient;
+let pollingRetryTimer;
 const sessionLanguages = new Map();
 let warnedMissingLanguageMigration = false;
 const TELEGRAM_POLLING_LOCK_ID = 731904251;
@@ -1975,6 +1976,7 @@ export function startTelegramBot() {
         console.error('[telegram-bot] Polling stopped:', error.message);
         botStarted = false;
         await releasePollingLock();
+        schedulePollingRetry();
       });
       console.info('[telegram-bot] Church Assistant is running.');
     } catch (error) {
@@ -1982,12 +1984,22 @@ export function startTelegramBot() {
       botStarted = false;
       if (lockClient === pollingClient) await releasePollingLock();
       else if (lockClient) lockClient.release();
+      schedulePollingRetry();
     } finally {
       pollingStarting = false;
     }
   })();
 
   return instance;
+}
+
+function schedulePollingRetry() {
+  if (stopping || pollingRetryTimer) return;
+  pollingRetryTimer = setTimeout(() => {
+    pollingRetryTimer = undefined;
+    startTelegramBot();
+  }, 10000);
+  pollingRetryTimer.unref?.();
 }
 
 async function releasePollingLock() {
@@ -2005,6 +2017,8 @@ async function releasePollingLock() {
 
 export async function stopTelegramBot() {
   stopping = true;
+  if (pollingRetryTimer) clearTimeout(pollingRetryTimer);
+  pollingRetryTimer = undefined;
   if (bot) bot.stop();
   bot = null;
   botStarted = false;

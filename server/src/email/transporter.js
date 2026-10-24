@@ -25,6 +25,7 @@ export function getEmailTransporter() {
 		port,
 		secure: config.smtp.secure,
 		auth: { user, pass: password },
+		family: 4,
 		connectionTimeout: 10000,
 		greetingTimeout: 10000,
 		socketTimeout: 15000,
