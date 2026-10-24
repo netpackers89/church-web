@@ -1,6 +1,7 @@
 import { ImagePlus, LoaderCircle, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import Button from './Button.jsx';
+import ReliableImage from './ReliableImage.jsx';
 
 export default function ImageUploadField({
   label = 'Image',
@@ -100,9 +101,10 @@ export default function ImageUploadField({
           }}
         >
           {previewUrl ? (
-            <img
+            <ReliableImage
               src={previewUrl}
               alt={label}
+              fallback={<span className="muted">Image preview unavailable</span>}
               style={{ width: '100%', height: '100%', maxHeight: '18rem', objectFit: 'cover', display: 'block' }}
             />
           ) : (

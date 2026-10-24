@@ -8,7 +8,7 @@ import { publicService } from '../../services/api.js';
 import { siteConfig } from '../../utils/siteConfig.js';
 
 const DIRECTIONS_URL = 'https://www.google.com/maps/dir/?api=1&destination=9.057601743589627%2C38.873814303814214';
-const MAP_EMBED_URL = 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d785.5888138125316!2d38.873814303814214!3d9.057601743589627!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x164b9111e3fcf36f%3A0x8616e9cdcb4983ac!2sYeka%20Abado%20Full%20Gospel%20Church%20Building%20Construction%20place!5e1!3m2!1sen!2set!4v1791904443660!5m2!1sen!2set';
+const MAP_EMBED_URL = 'https://www.google.com/maps?q=9.057601743589627%2C38.873814303814214&output=embed';
 
 export default function ContactVisitSection() {
   const { success } = useToast();

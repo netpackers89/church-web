@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { createUser, findUserByEmail, findUserById, invalidateUserSessions, pool } from '../config/db.js';
 import { config } from '../config/env.js';
-import { sendEmailNotification } from '../services/emailService.js';
+import { sendEmailNotification } from '../email/index.js';
 import { createMemberWelcomeNotification, sendMemberWelcomeEmail } from '../services/memberWelcomeService.js';
 import { getEthiopianBirthDetails, getGregorianBirthDetails } from '../utils/ethiopianCalendar.js';
 import { isSafeImageUrl } from '../services/imgbbService.js';
@@ -247,6 +247,10 @@ export async function register(request, response) {
 		if (body.confirmPassword !== password) throw validationError('Password and confirmation do not match.');
 		if (body.privacyAccepted !== true) throw validationError('Accept the privacy policy to register.');
 		const phone = normalizePhone(body.phone);
+		const maritalStatus = body.maritalStatus;
+		if (!['Single', 'Married', 'Rather not say'].includes(maritalStatus)) {
+			throw validationError('Select a valid marital status.');
+		}
 		const hasEthiopianBirthDate = body.birthDateEc !== undefined && body.birthDateEc !== null && body.birthDateEc !== '';
 		const hasGregorianBirthDate = body.birthDateGregorian !== undefined && body.birthDateGregorian !== null && body.birthDateGregorian !== '';
 		if (hasEthiopianBirthDate === hasGregorianBirthDate) throw validationError('Provide a birth date in either the Ethiopian or Gregorian calendar.');
@@ -277,6 +281,7 @@ export async function register(request, response) {
 			birthDateEc: birth.ethiopian,
 			birthDateGregorian: birth.gregorian,
 			location: body.location,
+			maritalStatus,
 			otherLocation,
 			profileImageUrl,
 			notifyEmail,

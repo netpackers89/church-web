@@ -50,9 +50,9 @@ VALUES ('SYSTEM_OWNER', 'System owner', 'Protected highest-privilege application
 ON CONFLICT (code) DO UPDATE
 SET name = EXCLUDED.name, description = EXCLUDED.description, is_system = TRUE;
 
-INSERT INTO permissions (code, description) VALUES
-    ('users.assign_role', 'Assign supported roles to users'),
-    ('system.owner.manage', 'Manage protected system-owner authority')
+INSERT INTO permissions (code, name, description) VALUES
+    ('users.assign_role', 'Assign user roles', 'Assign supported roles to users'),
+    ('system.owner.manage', 'Manage system owner', 'Manage protected system-owner authority')
 ON CONFLICT (code) DO NOTHING;
 
 -- An owner has all currently defined capabilities.  Future permissions must

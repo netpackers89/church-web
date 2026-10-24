@@ -62,11 +62,22 @@ export function gregorianDateToEthiopian(value) {
 export function parseEthiopianDate(value) {
 	let dateParts;
 	if (typeof value === 'string') {
-		const match = /^(\d{1,6})-(\d{1,2})-(\d{1,2})$/.exec(value);
-		if (!match) throw new RangeError('birthDateEc must use YYYY-MM-DD Ethiopian format.');
-		dateParts = { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+		const numericMatch = /^(\d{1,6})-(\d{1,2})-(\d{1,2})$/.exec(value);
+		const namedMonthMatch = /^(\d{1,6})[\s-]+([a-z]+)[\s-]+(\d{1,2})$/i.exec(value.trim());
+		if (numericMatch) {
+			dateParts = { year: Number(numericMatch[1]), month: Number(numericMatch[2]), day: Number(numericMatch[3]) };
+		} else if (namedMonthMatch) {
+			const month = ETHIOPIAN_MONTHS.findIndex((name) => name.toLowerCase() === namedMonthMatch[2].toLowerCase()) + 1;
+			if (!month) throw new RangeError('birthDateEc must use a valid Ethiopian month name.');
+			dateParts = { year: Number(namedMonthMatch[1]), month, day: Number(namedMonthMatch[3]) };
+		} else {
+			throw new RangeError('birthDateEc must use YYYY-MM-DD or "YYYY Month D" Ethiopian format.');
+		}
 	} else if (value && typeof value === 'object') {
-		dateParts = { year: Number(value.year), month: Number(value.month), day: Number(value.day) };
+		const monthValue = typeof value.month === 'string' && !/^\d+$/.test(value.month.trim())
+			? ETHIOPIAN_MONTHS.findIndex((name) => name.toLowerCase() === value.month.trim().toLowerCase()) + 1
+			: Number(value.month);
+		dateParts = { year: Number(value.year), month: monthValue, day: Number(value.day) };
 	} else {
 		throw new RangeError('birthDateEc is required as a date or year/month/day object.');
 	}

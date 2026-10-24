@@ -2,11 +2,12 @@ import { pool } from '../config/db.js';
 import { config } from '../config/env.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { churchDate, publishAutomaticDailyVerse } from '../services/dailyVerseService.js';
-import { sendEmailNotification } from '../services/emailService.js';
-import { createNewChristianWelcomeEmail } from '../services/welcomeEmailTemplate.js';
+import { createNewChristianWelcomeEmail, sendEmailNotification } from '../email/index.js';
 import { pageParams, paged, requestError } from '../utils/http.js';
 import { requiredString } from '../utils/http.js';
 import { normalizePaymentMethods } from '../services/paymentMethods.js';
+import { GROUP_SOURCE, resolveJoin, joinGroup, createPendingJoinRequest, listPublicDepartments as fetchPublicDepartments, findDepartmentById } from '../services/groupMembershipService.js';
+import { sendGroupJoinConfirmation } from '../services/groupJoinNotification.js';
 
 const VALID_NEW_CHRISTIAN_CONTACT_METHODS = new Set(['phone', 'email', 'telegram', 'whatsapp']);
 const VALID_NEW_CHRISTIAN_LANGUAGES = new Set(['en', 'am', 'om', 'ti']);
@@ -100,39 +101,60 @@ export async function listEvents(request, response) {
 				COALESCE(l.name, e.location_text) AS location
 			FROM events e LEFT JOIN program_locations l ON l.id=e.location_id
 			WHERE e.status IN ('PUBLISHED','POSTPONED','CANCELLED') AND e.deleted_at IS NULL
+				AND e.audience_group_id IS NULL AND e.audience_group_type IS NULL
 			ORDER BY e.starts_at ASC
 		`);
 		const schedules = await pool.query(`
-			WITH RECURSIVE occurrences AS (
-				SELECT s.id AS schedule_id, p.id AS program_id, p.name, p.description, p.category AS program_category,
-					COALESCE(s.image_url, p.image_url) AS image_url, s.status AS schedule_status,
-					s.weekday, s.start_time, s.end_time, s.timezone,
-					COALESCE(l.name, s.location_text, '') AS location,
-					((NOW() AT TIME ZONE s.timezone)::date + ((s.weekday - EXTRACT(DOW FROM NOW() AT TIME ZONE s.timezone)::int + 7) % 7)) AS occurrence_date,
-					(((NOW() AT TIME ZONE s.timezone)::date + ((s.weekday - EXTRACT(DOW FROM NOW() AT TIME ZONE s.timezone)::int + 7) % 7))::timestamp + s.start_time) AT TIME ZONE s.timezone AS occurrence_start,
-					(((NOW() AT TIME ZONE s.timezone)::date + ((s.weekday - EXTRACT(DOW FROM NOW() AT TIME ZONE s.timezone)::int + 7) % 7))::timestamp + s.end_time + CASE WHEN s.end_time <= s.start_time THEN INTERVAL '1 day' ELSE INTERVAL '0 days' END) AT TIME ZONE s.timezone AS occurrence_end
+			WITH RECURSIVE anchors AS (
+				SELECT s.id AS schedule_id, p.id AS program_id, p.name, p.description,
+					p.category AS program_category, COALESCE(s.image_url, p.image_url) AS image_url,
+					s.status AS schedule_status, s.weekday, s.start_time, s.end_time,
+					COALESCE(s.timezone, $1) AS timezone, s.recurrence_start_date,
+					s.recurrence_end_date, COALESCE(l.name, s.location_text, '') AS location,
+					GREATEST(
+						(NOW() AT TIME ZONE COALESCE(s.timezone, $1))::date,
+						COALESCE(s.recurrence_start_date, (NOW() AT TIME ZONE COALESCE(s.timezone, $1))::date)
+					) AS anchor_date
 				FROM program_schedules s
 				JOIN programs p ON p.id=s.program_id AND p.is_active=TRUE AND p.deleted_at IS NULL
 				LEFT JOIN program_locations l ON l.id=s.location_id
-				WHERE s.status IN ('ACTIVE','SCHEDULED') AND s.weekday BETWEEN 0 AND 6 AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
+				WHERE s.status IN ('ACTIVE','SCHEDULED')
+					AND s.weekday BETWEEN 0 AND 6
+					AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
+					AND (s.recurrence_end_date IS NULL OR s.recurrence_end_date >= (NOW() AT TIME ZONE COALESCE(s.timezone, $1))::date)
+			), occurrence_seeds AS (
+				SELECT anchors.*,
+					anchor_date + ((weekday - EXTRACT(DOW FROM anchor_date)::int + 7) % 7) AS occurrence_date
+				FROM anchors
+			), occurrences AS (
+				SELECT * FROM occurrence_seeds
 				UNION ALL
-				SELECT schedule_id, program_id, name, description, program_category, image_url, schedule_status,
-					weekday, start_time, end_time, timezone, location, occurrence_date + 7,
-					((occurrence_date + 7)::timestamp + start_time) AT TIME ZONE timezone,
-					((occurrence_date + 7)::timestamp + end_time + CASE WHEN end_time <= start_time THEN INTERVAL '1 day' ELSE INTERVAL '0 days' END) AT TIME ZONE timezone
-				FROM occurrences WHERE occurrence_date < CURRENT_DATE + INTERVAL '90 days'
+				SELECT schedule_id, program_id, name, description, program_category, image_url,
+					schedule_status, weekday, start_time, end_time, timezone, recurrence_start_date,
+					recurrence_end_date, location, anchor_date, occurrence_date + 7
+				FROM occurrences
+				WHERE occurrence_date < (NOW() AT TIME ZONE timezone)::date + 90
+					AND (recurrence_end_date IS NULL OR occurrence_date + 7 <= recurrence_end_date)
+			), scheduled AS (
+				SELECT o.*,
+					((o.occurrence_date::timestamp + o.start_time) AT TIME ZONE o.timezone) AS occurrence_start,
+					((o.occurrence_date::timestamp + o.end_time
+						+ CASE WHEN o.end_time <= o.start_time THEN INTERVAL '1 day' ELSE INTERVAL '0 days' END)
+						AT TIME ZONE o.timezone) AS occurrence_end
+				FROM occurrences o
 			), eligible AS (
 				SELECT o.*, COALESCE(x.status, 'SCHEDULED') AS override_status,
 					COALESCE(x.starts_at, o.occurrence_start) AS final_start,
 					COALESCE(x.ends_at, o.occurrence_end) AS final_end,
 					COALESCE(x.location_text, o.location) AS final_location
-				FROM occurrences o
+				FROM scheduled o
 				LEFT JOIN program_schedule_overrides x ON x.schedule_id=o.schedule_id AND x.occurrence_date=o.occurrence_date
 				WHERE (x.status IS NULL OR x.status <> 'CANCELLED')
+					AND (o.recurrence_end_date IS NULL OR o.occurrence_date <= o.recurrence_end_date)
 					AND NOT EXISTS (
 						SELECT 1 FROM events promoted
 						WHERE promoted.program_id=o.program_id AND promoted.deleted_at IS NULL
-						AND (promoted.starts_at AT TIME ZONE o.timezone)::date=o.occurrence_date
+							AND (promoted.starts_at AT TIME ZONE o.timezone)::date=o.occurrence_date
 					)
 			)
 			SELECT CONCAT('program-', schedule_id, '-', occurrence_date::text) AS id,
@@ -143,7 +165,7 @@ export async function listEvents(request, response) {
 			FROM eligible
 			WHERE final_end > NOW()
 			ORDER BY final_start ASC
-		`);
+		`, [config.churchTimezone]);
 
 		const all = [...events.rows.map((event) => ({ ...event, timezone: config.churchTimezone })), ...schedules.rows]
 			.filter((event) => request.query.upcoming !== 'true' || (
@@ -153,6 +175,84 @@ export async function listEvents(request, response) {
 			.sort((left, right) => new Date(left.startAt) - new Date(right.startAt));
 		const visible = all.slice(offset, offset + limit);
 		return paged(response, visible, { page, limit }, all.length);
+	} catch (error) { return requestError(error, response); }
+}
+
+export async function calendarEvents(request, response) {
+	try {
+		const { from, to } = request.query;
+		const isDate = (value) => typeof value === 'string'
+			&& /^\d{4}-\d{2}-\d{2}$/.test(value)
+			&& !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+			&& new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+		if (!isDate(from) || !isDate(to) || from > to) {
+			return response.status(400).json({ error: 'Provide a valid calendar date range.' });
+		}
+		const rangeDays = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000;
+		if (rangeDays > 366) return response.status(400).json({ error: 'Calendar ranges cannot exceed 367 days.' });
+
+		const [events, occurrences] = await Promise.all([
+			pool.query(`
+				SELECT e.id::text AS id,e.title,e.description,e.starts_at AS "startAt",e.ends_at AS "endAt",
+					e.status,e.image_url AS "imageUrl",e.category,e.requires_registration AS "requiresRegistration",
+					'EVENT' AS "programType",COALESCE(l.name,e.location_text) AS location,$3::text AS timezone
+				FROM events e LEFT JOIN program_locations l ON l.id=e.location_id
+				WHERE e.status IN ('PUBLISHED','POSTPONED') AND e.deleted_at IS NULL
+					AND e.audience_group_id IS NULL AND e.audience_group_type IS NULL
+					AND (e.starts_at AT TIME ZONE $3)::date BETWEEN $1::date AND $2::date
+				ORDER BY e.starts_at`,
+				[from, to, config.churchTimezone],
+			),
+			pool.query(`
+				WITH RECURSIVE occurrences AS (
+					SELECT s.id AS schedule_id,p.id AS program_id,p.name,p.description,p.category,
+						COALESCE(s.image_url,p.image_url) AS image_url,s.status AS schedule_status,
+						s.weekday,s.start_time,s.end_time,COALESCE(s.timezone,$3) AS timezone,
+						s.recurrence_start_date,s.recurrence_end_date,
+						COALESCE(l.name,s.location_text,'') AS location,
+						(GREATEST($1::date,COALESCE(s.recurrence_start_date,$1::date))
+							+ ((s.weekday-EXTRACT(DOW FROM GREATEST($1::date,COALESCE(s.recurrence_start_date,$1::date)))::int+7)%7)) AS occurrence_date
+					FROM program_schedules s
+					JOIN programs p ON p.id=s.program_id AND p.is_active=TRUE AND p.deleted_at IS NULL
+					LEFT JOIN program_locations l ON l.id=s.location_id
+					WHERE s.status IN ('ACTIVE','SCHEDULED') AND s.weekday BETWEEN 0 AND 6
+						AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
+						AND (s.recurrence_start_date IS NULL OR s.recurrence_start_date <= $2::date)
+						AND (s.recurrence_end_date IS NULL OR s.recurrence_end_date >= $1::date)
+					UNION ALL
+					SELECT schedule_id,program_id,name,description,category,image_url,schedule_status,
+						weekday,start_time,end_time,timezone,recurrence_start_date,recurrence_end_date,location,occurrence_date+7
+					FROM occurrences WHERE occurrence_date+7 <= $2::date
+						AND (recurrence_end_date IS NULL OR occurrence_date+7 <= recurrence_end_date)
+				)
+				SELECT CONCAT('program-',o.schedule_id,'-',o.occurrence_date::text) AS id,
+					o.name AS title,o.description,
+					COALESCE(x.starts_at,((o.occurrence_date::timestamp+o.start_time) AT TIME ZONE o.timezone)) AS "startAt",
+					COALESCE(x.ends_at,((o.occurrence_date::timestamp+o.end_time+
+						CASE WHEN o.end_time<=o.start_time THEN INTERVAL '1 day' ELSE INTERVAL '0 days' END) AT TIME ZONE o.timezone)) AS "endAt",
+					CASE WHEN x.status='POSTPONED' THEN 'POSTPONED' ELSE 'PUBLISHED' END AS status,
+					o.image_url AS "imageUrl",COALESCE(o.category,'Regular Program') AS category,
+					FALSE AS "requiresRegistration",'RECURRING' AS "programType",
+					COALESCE(x.location_text,o.location) AS location,o.timezone
+				FROM occurrences o
+				LEFT JOIN program_schedule_overrides x
+					ON x.schedule_id=o.schedule_id AND x.occurrence_date=o.occurrence_date
+				WHERE (x.status IS NULL OR x.status<>'CANCELLED')
+					AND o.occurrence_date BETWEEN $1::date AND $2::date
+					AND (o.recurrence_end_date IS NULL OR o.occurrence_date<=o.recurrence_end_date)
+					AND NOT EXISTS (
+						SELECT 1 FROM events promoted
+						WHERE promoted.program_id=o.program_id AND promoted.deleted_at IS NULL
+							AND (promoted.starts_at AT TIME ZONE o.timezone)::date=o.occurrence_date
+					)
+				ORDER BY "startAt"`,
+				[from, to, config.churchTimezone],
+			),
+		]);
+		const data = [...events.rows, ...occurrences.rows]
+			.filter((event) => event.startAt)
+			.sort((left, right) => new Date(left.startAt) - new Date(right.startAt));
+		return response.json({ success: true, data, timezone: config.churchTimezone });
 	} catch (error) { return requestError(error, response); }
 }
 
@@ -173,21 +273,27 @@ export async function getEvent(request, response) {
 		const recurringMatch = /^program-(\d+)-(\d{4}-\d{2}-\d{2})$/.exec(request.params.id);
 		if (recurringMatch) {
 			const [, scheduleId, occurrenceDate] = recurringMatch;
+			const parsedOccurrenceDate = new Date(`${occurrenceDate}T00:00:00Z`);
+			if (Number.isNaN(parsedOccurrenceDate.getTime()) || parsedOccurrenceDate.toISOString().slice(0, 10) !== occurrenceDate) {
+				return response.status(404).json({ error: 'Scheduled program occurrence was not found.' });
+			}
 			const recurring = await pool.query(`
 				SELECT CONCAT('program-', s.id, '-', $2::date::text) AS id, p.name AS title, p.description,
-					COALESCE(x.starts_at, (($2::date::timestamp + s.start_time) AT TIME ZONE s.timezone)) AS "startAt",
-					COALESCE(x.ends_at, (($2::date::timestamp + s.end_time + CASE WHEN s.end_time <= s.start_time THEN INTERVAL '1 day' ELSE INTERVAL '0 days' END) AT TIME ZONE s.timezone)) AS "endAt",
+					COALESCE(x.starts_at, (($2::date::timestamp + s.start_time) AT TIME ZONE COALESCE(s.timezone,$3))) AS "startAt",
+					COALESCE(x.ends_at, (($2::date::timestamp + s.end_time + CASE WHEN s.end_time <= s.start_time THEN INTERVAL '1 day' ELSE INTERVAL '0 days' END) AT TIME ZONE COALESCE(s.timezone,$3))) AS "endAt",
 					CASE WHEN x.status='POSTPONED' THEN 'POSTPONED' ELSE 'PUBLISHED' END AS status,
 					COALESCE(s.image_url, p.image_url) AS "imageUrl", p.category,
-					FALSE AS "requiresRegistration", 'RECURRING' AS "programType", s.timezone,
+					FALSE AS "requiresRegistration", 'RECURRING' AS "programType", COALESCE(s.timezone,$3) AS timezone,
 					COALESCE(x.location_text, l.name, '') AS location
 				FROM program_schedules s JOIN programs p ON p.id=s.program_id
 				LEFT JOIN program_locations l ON l.id=s.location_id
 				LEFT JOIN program_schedule_overrides x ON x.schedule_id=s.id AND x.occurrence_date=$2::date
 				WHERE s.id=$1 AND p.is_active=TRUE AND p.deleted_at IS NULL
 					AND s.status IN ('ACTIVE','SCHEDULED') AND s.weekday=EXTRACT(DOW FROM $2::date)::int
+					AND (s.recurrence_start_date IS NULL OR s.recurrence_start_date<=$2::date)
+					AND (s.recurrence_end_date IS NULL OR s.recurrence_end_date>=$2::date)
 					AND (x.status IS NULL OR x.status <> 'CANCELLED')
-			`, [scheduleId, occurrenceDate]);
+			`, [scheduleId, occurrenceDate, config.churchTimezone]);
 			if (!recurring.rowCount) return response.status(404).json({ error: 'Program occurrence was not found.' });
 			return response.json({ success: true, data: recurring.rows[0] });
 		}
@@ -238,6 +344,14 @@ export async function listAnnouncements(_request, response) {
 export async function listCampaigns(_request, response) {
 	try {
 		const result = await pool.query(`SELECT c.id,c.title,c.description,c.goal_amount AS "goalAmount",c.currency,c.starts_at AS "startsAt",c.ends_at AS "endsAt",c.status,c.banner_url AS "bannerUrl",c.cta_url AS "ctaUrl",dc.name AS category,
+			COALESCE((
+				SELECT json_agg(json_build_object(
+				'id',pa.id::text,'name',pa.name,'type',pa.type,'accountHolder',pa.account_holder,
+				'accountNumber',pa.account_number,'phoneNumber',pa.phone_number,'branch',pa.branch,
+				'instructions',pa.instructions,'currency',pa.currency
+				) ORDER BY pa.id)
+				FROM campaign_payment_accounts pa WHERE pa.campaign_id=c.id AND pa.is_active=TRUE
+			), '[]'::json) AS "paymentAccounts",
 			COALESCE(SUM(d.amount) FILTER (WHERE d.status='APPROVED' AND d.deleted_at IS NULL AND d.currency=c.currency),0)::numeric AS "raisedAmount",
 			CASE WHEN c.status='CLOSED' OR (c.ends_at IS NOT NULL AND c.ends_at < NOW()) THEN 'COMPLETED' WHEN c.starts_at IS NOT NULL AND c.starts_at > NOW() THEN 'UPCOMING' ELSE 'ACTIVE' END AS "displayStatus"
 			FROM fundraising_campaigns c LEFT JOIN donation_categories dc ON dc.id=c.category_id LEFT JOIN donations d ON d.campaign_id=c.id
@@ -250,21 +364,42 @@ export async function listPartners(_request, response) {
 }
 export async function schedules(_request, response) {
 	try {
-		const result = await pool.query(`SELECT s.id,p.name,s.starts_at AS "startsAt",s.ends_at AS "endsAt",s.weekday,s.start_time AS "startTime",s.end_time AS "endTime",s.status,l.name AS "locationName",l.address,l.latitude,l.longitude,
-			CASE
-				WHEN s.weekday BETWEEN 0 AND 6 AND s.start_time IS NOT NULL THEN
-					(((NOW() AT TIME ZONE COALESCE(s.timezone,$1))::date
-					 + ((s.weekday - EXTRACT(DOW FROM (NOW() AT TIME ZONE COALESCE(s.timezone,$1))::date)::integer + 7) % 7)
-					 + CASE WHEN ((s.weekday - EXTRACT(DOW FROM (NOW() AT TIME ZONE COALESCE(s.timezone,$1))::date)::integer + 7) % 7) = 0
-						AND s.start_time <= (NOW() AT TIME ZONE COALESCE(s.timezone,$1))::time THEN 7 ELSE 0 END
-					 + s.start_time) AT TIME ZONE COALESCE(s.timezone,$1))
-				WHEN s.starts_at >= NOW() THEN s.starts_at
-				ELSE NULL
-			END AS "nextAt", COALESCE(s.timezone,$1) AS timezone
-			FROM program_schedules s JOIN programs p ON p.id=s.program_id LEFT JOIN program_locations l ON l.id=s.location_id
-			WHERE p.is_active=TRUE AND p.deleted_at IS NULL AND s.status IN ('ACTIVE','SCHEDULED')
-			AND ((s.weekday BETWEEN 0 AND 6 AND s.start_time IS NOT NULL) OR s.starts_at >= NOW())
-			ORDER BY "nextAt" NULLS LAST,p.name,s.id`, [config.churchTimezone]);
+		const result = await pool.query(`WITH candidates AS (
+				SELECT s.*,p.name AS program_name,p.is_active,p.deleted_at AS program_deleted_at,
+					l.name AS "locationName",l.address,l.latitude,l.longitude,
+					COALESCE(s.timezone,$1) AS resolved_timezone,
+					NOW() AT TIME ZONE COALESCE(s.timezone,$1) AS local_now
+				FROM program_schedules s
+				JOIN programs p ON p.id=s.program_id
+				LEFT JOIN program_locations l ON l.id=s.location_id
+				WHERE p.is_active=TRUE AND p.deleted_at IS NULL AND s.status IN ('ACTIVE','SCHEDULED')
+			), anchors AS (
+				SELECT *,GREATEST(local_now::date,COALESCE(recurrence_start_date,local_now::date)) AS anchor_date
+				FROM candidates
+			), occurrences AS (
+				SELECT *,anchor_date+((weekday-EXTRACT(DOW FROM anchor_date)::int+7)%7) AS candidate_date
+				FROM anchors
+			), next_dates AS (
+				SELECT *,candidate_date+CASE
+					WHEN candidate_date=local_now::date AND start_time<=local_now::time THEN 7
+					ELSE 0
+				END AS next_date
+				FROM occurrences
+			)
+			SELECT id,program_id AS "programId",program_name AS name,starts_at AS "startsAt",ends_at AS "endsAt",weekday,
+				start_time AS "startTime",end_time AS "endTime",status,"locationName",address,latitude,longitude,
+				CASE
+					WHEN weekday BETWEEN 0 AND 6 AND start_time IS NOT NULL THEN
+						((next_date::timestamp+start_time) AT TIME ZONE resolved_timezone)
+					WHEN starts_at>=NOW() THEN starts_at
+					ELSE NULL
+				END AS "nextAt",resolved_timezone AS timezone
+			FROM next_dates
+			WHERE ((weekday BETWEEN 0 AND 6 AND start_time IS NOT NULL)
+					AND (recurrence_start_date IS NULL OR recurrence_start_date<=next_date)
+					AND (recurrence_end_date IS NULL OR recurrence_end_date>=next_date))
+				OR (weekday IS NULL AND starts_at>=NOW())
+			ORDER BY "nextAt" NULLS LAST,name,id`, [config.churchTimezone]);
 		return response.json({ success: true, data: result.rows, timezone: config.churchTimezone });
 	} catch (error) { return requestError(error, response); }
 }
@@ -292,6 +427,78 @@ export async function organizationDepartments(request,response) {
 export async function getDepartment(request,response) {
 	try { const result=await pool.query(`SELECT d.id,d.name,d.description,o.name AS "organizationName",u.name AS "leaderName" FROM departments d LEFT JOIN organizations o ON o.id=d.organization_id LEFT JOIN users u ON u.id=d.leader_user_id WHERE d.id=$1 AND d.is_active=TRUE AND d.deleted_at IS NULL`,[request.params.id]); if(!result.rowCount)return response.status(404).json({error:'Department was not found.'});return response.json({success:true,data:result.rows[0]}); }catch(error){return requestError(error,response);}
 }
+
+// ---- Public group directory (visible to unauthenticated visitors) ----
+export async function listPublicDepartments(request, response) {
+  try {
+    const departments = await fetchPublicDepartments();
+    return response.json({ success: true, data: departments });
+  } catch (error) { return requestError(error, response); }
+}
+
+export async function getPublicDepartment(request, response) {
+  try {
+    const department = await findDepartmentById(Number(request.params.id));
+    if (!department) return response.status(404).json({ error: 'Department was not found.' });
+    return response.json({ success: true, data: department });
+  } catch (error) { return requestError(error, response); }
+}
+
+export async function joinDepartment(request, response) {
+  try {
+    const check = await resolveJoin({ request, source: GROUP_SOURCE.DEPARTMENT, id: Number(request.params.id) });
+    if (check.status === 'already_member') return response.status(200).json({ success: true, data: { status: 'already_member', group: check.group }, message: 'You are already a member of this group.' });
+    if (check.status === 'already_requested') return response.status(200).json({ success: true, data: { status: 'already_requested', group: check.group, requestId: check.requestId }, message: 'A join request for this group is already pending.' });
+    const joined = await joinGroup(request, GROUP_SOURCE.DEPARTMENT, check.record);
+
+    // Send join confirmation (email + Telegram) — non-blocking
+    try {
+      const user = request.user;
+      const group = check.group;
+      await sendGroupJoinConfirmation({
+        user: { id: user.id, name: user.name, email: user.email, notify_email: user.notify_email, telegram_chat_id: user.telegram_chat_id, notify_telegram: user.notify_telegram },
+        group: { id: group.id, name: group.name, description: group.description, bannerUrl: group.bannerUrl || group.banner_url, logoUrl: group.logoUrl || group.logo_url, telegramPublicLink: group.telegramPublicLink || group.telegram_public_link, telegramUsername: group.telegramUsername || group.telegram_username },
+        groupTypeLabel: 'Department',
+        churchContact: [config.branding.email, config.branding.phone].filter(Boolean).join(' · '),
+        churchWebsite: config.branding.websiteUrl,
+        churchSocialLinks: [
+          { label: 'Website', url: config.branding.websiteUrl, color: '#6366F1' },
+          { label: 'Telegram', url: config.branding.telegramUrl, color: '#0088cc' },
+        ],
+      }).catch((error) => console.error('[group join] notification failed:', error.message));
+    } catch { /* notification errors are non-fatal */ }
+
+    return response.status(201).json({ success: true, data: { status: 'joined', group: joined.group }, message: "You're in! Welcome to the group." });
+  } catch (error) { return requestError(error, response); }
+}
+
+export async function joinBibleStudyGroup(request, response) {
+  try {
+    const check = await resolveJoin({ request, source: GROUP_SOURCE.BIBLE_STUDY_GROUP, id: Number(request.params.id) });
+    if (check.status === 'already_member') return response.status(200).json({ success: true, data: { status: 'already_member', group: check.group }, message: 'You are already a member of this group.' });
+    if (check.status === 'already_requested') return response.status(200).json({ success: true, data: { status: 'already_requested', group: check.group, requestId: check.requestId }, message: 'A join request for this group is already pending.' });
+    const joined = await joinGroup(request, GROUP_SOURCE.BIBLE_STUDY_GROUP, check.record);
+
+    // Send join confirmation (email + Telegram) — non-blocking
+    try {
+      const user = request.user;
+      const group = check.group;
+      await sendGroupJoinConfirmation({
+        user: { id: user.id, name: user.name, email: user.email, notify_email: user.notify_email, telegram_chat_id: user.telegram_chat_id, notify_telegram: user.notify_telegram },
+        group: { id: group.id, name: group.name, description: group.description, bannerUrl: group.bannerUrl || group.banner_image, logoUrl: group.logoUrl || group.group_profile_image, telegramPublicLink: group.telegramPublicLink || group.telegram_public_link, telegramUsername: group.telegramUsername || group.telegram_username },
+        groupTypeLabel: 'Bible Study Group',
+        churchContact: [config.branding.email, config.branding.phone].filter(Boolean).join(' · '),
+        churchWebsite: config.branding.websiteUrl,
+        churchSocialLinks: [
+          { label: 'Website', url: config.branding.websiteUrl, color: '#6366F1' },
+          { label: 'Telegram', url: config.branding.telegramUrl, color: '#0088cc' },
+        ],
+      }).catch((error) => console.error('[group join] notification failed:', error.message));
+    } catch { /* notification errors are non-fatal */ }
+
+    return response.status(201).json({ success: true, data: { status: 'joined', group: joined.group }, message: "You're in! Welcome to the group." });
+  } catch (error) { return requestError(error, response); }
+}
 export async function getBankAccount(_request, response) {
 	try {
 		const result = await pool.query(`SELECT key,value FROM system_settings WHERE key IN ('paymentMethods','bank_account','bankName','accountHolder','accountNumber','bankBranch','transferInstructions','currency')`);
@@ -314,7 +521,7 @@ export async function getBankAccount(_request, response) {
 
 export async function listGivingCategories(_request, response) {
 	try {
-		const result = await pool.query(`SELECT id,name,description FROM donation_categories WHERE is_active=TRUE ORDER BY name`);
+		const result = await pool.query(`SELECT id,name,description,category_code AS "categoryCode" FROM donation_categories WHERE is_active=TRUE ORDER BY name`);
 		return response.json({ success:true, data:result.rows });
 	} catch(error) { return requestError(error,response); }
 }

@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { requireUser } from '../middleware/requireUser.js';
 import { getRegistrationOptions } from '../controllers/userController.js';
-import { createFollowupTelegramLink, followupTelegramStatus } from '../controllers/newChristianController.js';
-import { dailyVerse, getBankAccount, getBibleStudyGroup, getDepartment, getEvent, getOrganization, listAnnouncements, listBanners, listBibleStudyGroups, listBibleVerses, listCampaigns, listEvents, listGivingCategories, listOrganizations, listPartners, listSermons, nextGathering, organizationDepartments, schedules, submitContact, submitNewChristian } from '../controllers/publicController.js';
+import { createFollowupTelegramLink, followupTelegramStatus, activateNewBeliever } from '../controllers/newChristianController.js';
+import { calendarEvents, dailyVerse, getBankAccount, getBibleStudyGroup, getDepartment, getEvent, getOrganization, joinBibleStudyGroup, joinDepartment, listAnnouncements, listBanners, listBibleStudyGroups, listBibleVerses, listCampaigns, listEvents, listGivingCategories, listOrganizations, listPartners, listPublicDepartments, listSermons, nextGathering, organizationDepartments, schedules, submitContact, submitNewChristian } from '../controllers/publicController.js';
 
 const router = Router();
 
@@ -13,12 +13,16 @@ router.post('/new-christian/telegram/link-token', createFollowupTelegramLink);
 router.post('/new-christian/telegram/status', followupTelegramStatus);
 
 router.get('/events', listEvents);
+router.get('/events/calendar', calendarEvents);
 router.get('/events/next-gathering', nextGathering);
 router.get('/events/:id', getEvent);
 // Study groups and Scripture are part of the member experience. Keeping this
 // guard at the API level prevents direct-link access outside the public UI.
-router.get('/bible-study-groups', requireUser, listBibleStudyGroups);
+router.get('/bible-study-groups', listBibleStudyGroups);
 router.get('/bible-study-groups/:id', requireUser, getBibleStudyGroup);
+router.post('/bible-study-groups/:id/join', requireUser, joinBibleStudyGroup);
+router.get('/departments', listPublicDepartments);
+router.post('/departments/:id/join', requireUser, joinDepartment);
 router.get('/campaigns', listCampaigns);
 router.get('/sermons', listSermons);
 router.get('/announcements', listAnnouncements);
@@ -34,6 +38,7 @@ router.get('/organizations', listOrganizations);
 router.get('/organizations/:id/departments', organizationDepartments);
 router.get('/organizations/:id', getOrganization);
 router.get('/departments/:id', getDepartment);
+router.post('/new-believer/activate', activateNewBeliever);
 router.get('/bank-account', getBankAccount);
 router.get('/giving-categories', listGivingCategories);
 

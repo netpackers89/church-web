@@ -123,6 +123,7 @@ export default function RegisterPage() {
       birthDateGregorian: '',
       location: '',
       otherLocation: '',
+      maritalStatus: '',
       profileImageUrl: '',
       preferredLanguage: 'en',
       notifyEmail: true,
@@ -178,15 +179,23 @@ export default function RegisterPage() {
       if (checking) return;
       if (Date.now() >= telegramLink.expiresAt) {
         setTelegramStatus('EXPIRED');
+        setTelegramLink(null);
         return;
       }
       checking = true;
       try {
-        const response = await userService.profile();
-        const profile = response.data?.data ?? response.data?.user ?? {};
-        if (active && profile.telegramConnected) setTelegramStatus('CONNECTED');
+        const response = await userService.telegramLinkStatus(telegramLink.token);
+        const status = response.data?.data?.status ?? response.data?.status;
+        if (!active) return;
+        if (status === 'CONNECTED') {
+          setTelegramStatus('CONNECTED');
+          setTelegramLink(null);
+        } else if (status === 'EXPIRED') {
+          setTelegramStatus('EXPIRED');
+          setTelegramLink(null);
+        }
       } catch {
-        // A temporary profile request failure should not falsely mark the link as failed.
+        // A temporary status request failure should not falsely mark the link as failed.
       } finally {
         checking = false;
       }
@@ -205,12 +214,29 @@ export default function RegisterPage() {
     try {
       const response = await userService.telegramLinkToken();
       const url = response.data?.url;
-      if (!url) throw new Error('The church bot did not return a connection link.');
-      setTelegramLink({ url, expiresAt: Date.now() + (response.data.expiresInSeconds ?? 600) * 1000 });
+      const token = response.data?.token;
+      if (!url || !token) throw new Error('The church bot did not return a secure connection link.');
+      setTelegramLink({ url, token, expiresAt: Date.now() + (response.data.expiresInSeconds ?? 300) * 1000 });
       setTelegramStatus('WAITING');
     } catch (failure) {
       setTelegramStatus('FAILED');
       setTelegramError(failure.message || 'Telegram could not be connected right now.');
+    } finally {
+      setTelegramBusy(false);
+    }
+  }
+
+  async function disconnectTelegram() {
+    const password = window.prompt('Enter your current church-account password to disconnect Telegram.');
+    if (!password) return;
+    setTelegramBusy(true);
+    setTelegramError('');
+    try {
+      await userService.telegramUnlink(password);
+      setTelegramStatus('NOT_CONNECTED');
+      setTelegramLink(null);
+    } catch (failure) {
+      setTelegramError(failure.message || 'Telegram could not be disconnected.');
     } finally {
       setTelegramBusy(false);
     }
@@ -296,6 +322,10 @@ export default function RegisterPage() {
       next.location = 'Please select your location.';
     }
 
+    if (!['Single', 'Married', 'Rather not say'].includes(form.maritalStatus)) {
+      next.maritalStatus = 'Please select a marital status.';
+    }
+
     if (form.location === 'Other' && !form.otherLocation.trim()) {
       next.otherLocation = 'Please enter your location.';
     }
@@ -307,9 +337,22 @@ export default function RegisterPage() {
     if (form.profileImageUrl.trim()) {
       try {
         const imageUrl = new URL(form.profileImageUrl.trim());
-        if (imageUrl.protocol !== 'https:' || imageUrl.username || imageUrl.password) throw new Error();
+        if (
+          imageUrl.protocol !== 'https:' ||
+          imageUrl.username ||
+          imageUrl.password ||
+          !/\.(png|jpe?g|webp|gif)$/i.test(imageUrl.pathname)
+        ) throw new Error();
       } catch {
-        next.profileImageUrl = 'Enter a valid HTTPS image URL.';
+        next.profileImageUrl = 'Enter an HTTPS URL ending in .jpg, .png, .webp, or .gif.';
+      }
+    }
+
+    if (profileImageFile) {
+      if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(profileImageFile.type)) {
+        next.profileImageUrl = 'Choose a JPG, PNG, WebP, or GIF image.';
+      } else if (profileImageFile.size < 1 || profileImageFile.size > 5 * 1024 * 1024) {
+        next.profileImageUrl = 'Choose an image no larger than 5 MB.';
       }
     }
 
@@ -340,6 +383,7 @@ export default function RegisterPage() {
           ? { birthDateEc: `${form.birthYear}-${pad(Number(form.birthMonth))}-${pad(Number(form.birthDay))}` }
           : { birthDateGregorian: form.birthDateGregorian }),
         location: form.location,
+        maritalStatus: form.maritalStatus,
         otherLocation:
           form.location === 'Other'
             ? form.otherLocation.trim()
@@ -520,6 +564,7 @@ export default function RegisterPage() {
                   {telegramError ? <Alert variant="warning">{telegramError}</Alert> : null}
                   {telegramStatus === 'WAITING' && telegramLink ? <a className="btn btn-secondary" href={telegramLink.url} target="_blank" rel="noreferrer">Open church bot</a> : null}
                   {telegramStatus !== 'CONNECTED' && sessionReady && telegramStatus !== 'WAITING' ? <Button variant="secondary" loading={telegramBusy} onClick={createTelegramConnection}>{telegramStatus === 'EXPIRED' || telegramStatus === 'FAILED' ? 'Try connecting again' : 'Connect Telegram'}</Button> : null}
+                  {telegramStatus === 'CONNECTED' && sessionReady ? <Button variant="secondary" loading={telegramBusy} onClick={disconnectTelegram}>Disconnect Telegram</Button> : null}
                 </section>
                 {sessionReady ? <Button variant="primary" size="lg" block onClick={() => navigate('/', { replace: true })}>Skip for now and continue</Button> : <Button to="/login" variant="primary" size="lg" block>Sign in to your account</Button>}
                 <p className="modern-register-consent">You can skip Telegram and connect later from Account Settings.</p>
@@ -562,6 +607,21 @@ export default function RegisterPage() {
                   required
                 />
               </div>
+
+              <Input
+                label="Marital status"
+                type="select"
+                value={form.maritalStatus}
+                onChange={set('maritalStatus')}
+                options={[
+                  { value: '', label: 'Select your marital status' },
+                  { value: 'Single', label: 'Single' },
+                  { value: 'Married', label: 'Married' },
+                  { value: 'Rather not say', label: 'Rather not say' },
+                ]}
+                error={errors.maritalStatus}
+                required
+              />
 
               <div className="modern-field">
                 <label>
@@ -635,16 +695,17 @@ export default function RegisterPage() {
 
               <div className="profile-image-entry">
                 <div className="profile-image-preview" role="img" aria-label="Profile image preview">
-                  {(profileImagePreview || form.profileImageUrl) && !profileImageFailed ? <img src={profileImagePreview || form.profileImageUrl} alt="" onError={() => setProfileImageFailed(true)} /> : <Church size={24} aria-hidden="true" />}
+                  {(profileImagePreview || form.profileImageUrl) && !profileImageFailed ? <img src={profileImagePreview || form.profileImageUrl} alt="" referrerPolicy="no-referrer" onError={() => setProfileImageFailed(true)} /> : <Church size={24} aria-hidden="true" />}
                 </div>
                 <div className="profile-image-fields">
                   <label htmlFor="register-profile-image">Profile picture <span className="optional-label">Optional</span></label>
                   <div className="profile-image-actions">
                     <label className="profile-image-upload" htmlFor="register-profile-image"><ImagePlus size={16} /> Upload image</label>
-                    <input id="register-profile-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => { const file = event.target.files?.[0] ?? null; setProfileImageFile(file); setProfileImageFailed(false); setProfileImagePreview(file ? URL.createObjectURL(file) : ''); setForm((previous) => ({ ...previous, profileImageUrl: '' })); }} />
+                    <input id="register-profile-image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => { const file = event.target.files?.[0] ?? null; event.target.value = ''; setImageError(''); setProfileImageFile(file); setProfileImageFailed(false); setProfileImagePreview(file ? URL.createObjectURL(file) : ''); setForm((previous) => ({ ...previous, profileImageUrl: '' })); }} />
                     <span>or</span>
                     <input type="url" value={form.profileImageUrl} onChange={(event) => { setProfileImageFile(null); setProfileImageFailed(false); set('profileImageUrl')(event); }} placeholder="Paste HTTPS image URL" aria-label="Profile image URL" />
                   </div>
+                  {(profileImagePreview || form.profileImageUrl) ? <button className="profile-image-remove" type="button" onClick={() => { setProfileImageFile(null); setProfileImagePreview(''); setProfileImageFailed(false); setForm((previous) => ({ ...previous, profileImageUrl: '' })); setErrors((previous) => ({ ...previous, profileImageUrl: undefined })); }}>Remove picture</button> : null}
                   {errors.profileImageUrl ? <span className="modern-field-error" role="alert">{errors.profileImageUrl}</span> : <span className="modern-field-hint">JPG, PNG, WebP, or GIF. Uploads are limited to 5 MB.</span>}
                 </div>
               </div>

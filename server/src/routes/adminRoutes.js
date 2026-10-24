@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import {
   auditLogs,
   createAnnouncement,
@@ -8,6 +9,7 @@ import {
   publishVerse,
   report,
   replyToTelegramMessage,
+  addTelegramMessageNote,
   roles,
   setUserRoles,
   settings,
@@ -29,14 +31,31 @@ import {
   testCommunication,
 } from '../controllers/adminController.js';
 import { approveDonation, listDonations, rejectDonation } from '../controllers/adminGivingController.js';
-import { listAdminEvents } from '../controllers/eventController.js';
+import { createEvent, deleteEvent, listAdminEvents, updateEvent } from '../controllers/eventController.js';
 import { createMedia, deleteMedia, updateMedia, uploadMedia } from '../controllers/mediaController.js';
 import { requirePermission } from '../middleware/requirePermission.js';
 import { requireUser } from '../middleware/requireUser.js';
-import { createBibleStudyGroup, createDepartment, createOrganization, createProgram, createSchedule, getBibleStudyGroupById, getDepartmentById, listBibleStudyGroups, listDepartments, listOrganizations, listPrograms, promoteProgramToEvent, setScheduleOverride, updateProgram } from '../controllers/programController.js';
+import { createBibleStudyGroup, createDepartment, createOrganization, createProgram, createSchedule, getBibleStudyGroupById, getDepartmentById, listBibleStudyGroups, listDepartments, listOrganizations, listPrograms, promoteProgramToEvent, setScheduleOverride, updateBibleStudyCommunityLinks, updateDepartmentCommunityLinks, updateProgram } from '../controllers/programController.js';
+import { createNewBeliever, activateNewBeliever, createNewBelieverTelegramLink, verifyNewBelieverTelegramLink } from '../controllers/newChristianController.js';
+import { joinBibleStudyGroup, joinDepartment } from '../controllers/publicController.js';
 import { registerStaff, activateAccount } from '../controllers/adminRegistrationController.js';
 import { findFollowupLinkCandidates, linkFollowupToVerifiedMember, listFollowupAssignees, listNewChristianFollowups, retryMemberWelcome, retryNewChristianWelcome, updateNewChristianFollowup } from '../controllers/newChristianController.js';
 import { createEmailTemplate, listEmailTemplates, previewEmailTemplate, updateEmailTemplate } from '../controllers/messageTemplateController.js';
+import { deleteManagedGroup, listGroupLeaderCandidates, setManagedBibleStudyGroupStatus, setManagedDepartmentStatus, updateManagedGroup } from '../controllers/groupAdminController.js';
+import {
+  createTelegramAutoReply,
+  createTelegramMenuItem,
+  checkTelegramConnection,
+  deleteTelegramAutoReply,
+  deleteTelegramMenuItem,
+  listTelegramAutoReplies,
+  listTelegramMenuItems,
+  previewTelegramAutoReply,
+  sendTelegramAdminTest,
+  telegramManagementOverview,
+  updateTelegramAutoReply,
+  updateTelegramMenuItem,
+} from '../controllers/telegramAdminController.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -50,6 +69,14 @@ const upload = multer({
   },
 });
 
+const telegramAdminTestLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many administrator Telegram tests. Try again in a few minutes.' },
+});
+
 const router = Router();
 router.use(requireUser);
 router.get('/roles', requirePermission('roles.manage'), roles);
@@ -60,10 +87,17 @@ router.put('/roles/:id/permissions', requirePermission('roles.permissions.manage
 router.delete('/roles/:id', requirePermission('roles.manage'), deleteRole);
 router.get('/departments', requirePermission('staff.manage'), listDepartments);
 router.post('/departments', requirePermission('staff.manage'), createDepartment);
+router.patch('/departments/:id', requirePermission('staff.manage'), updateManagedGroup);
+router.patch('/departments/:id/status', requirePermission('staff.manage'), setManagedDepartmentStatus);
+router.delete('/departments/:id', requirePermission('staff.manage'), deleteManagedGroup);
+router.patch('/departments/:id/community-links', requirePermission('staff.manage'), updateDepartmentCommunityLinks);
 router.get('/organizations', requirePermission('staff.manage'), listOrganizations);
 router.post('/organizations', requirePermission('staff.manage'), createOrganization);
 router.get('/programs', requirePermission('programs.manage'), listPrograms);
 router.get('/events', requirePermission('events.manage'), listAdminEvents);
+router.post('/events', requirePermission('events.manage'), createEvent);
+router.patch('/events/:id', requirePermission('events.manage'), updateEvent);
+router.delete('/events/:id', requirePermission('events.manage'), deleteEvent);
 router.get('/new-christian-followups', requirePermission('membership.manage'), listNewChristianFollowups);
 router.get('/new-christian-followups/assignees', requirePermission('membership.manage'), listFollowupAssignees);
 router.get('/new-christian-followups/:id/link-candidates', requirePermission('membership.manage'), findFollowupLinkCandidates);
@@ -77,6 +111,11 @@ router.post('/programs/:id/schedules', requirePermission('programs.manage'), cre
 router.put('/program-schedules/:id/overrides/:date', requirePermission('programs.manage'), setScheduleOverride);
 router.post('/bible-study-groups', requirePermission('programs.manage'), createBibleStudyGroup);
 router.get('/bible-study-groups', requirePermission('programs.manage'), listBibleStudyGroups);
+router.patch('/bible-study-groups/:id', requirePermission('programs.manage'), updateManagedGroup);
+router.patch('/bible-study-groups/:id/status', requirePermission('programs.manage'), setManagedBibleStudyGroupStatus);
+router.delete('/bible-study-groups/:id', requirePermission('programs.manage'), deleteManagedGroup);
+router.patch('/bible-study-groups/:id/community-links', requirePermission('programs.manage'), updateBibleStudyCommunityLinks);
+router.get('/group-leader-candidates', requirePermission('staff.manage', 'programs.manage'), listGroupLeaderCandidates);
 router.post('/users/:userId/roles', requirePermission('roles.manage'), setUserRoles);
 router.post('/users/:userId/retry-welcome', requirePermission('users.manage'), retryMemberWelcome);
 router.patch('/users/:userId/status', requirePermission('users.manage'), updateUserStatus);
@@ -117,9 +156,27 @@ router.patch('/media/:id', requirePermission('media.manage', 'announcements.mana
 router.delete('/media/:id', requirePermission('media.manage', 'announcements.manage'), deleteMedia);
 router.post('/registrations', requirePermission('users.create'), registerStaff);
 router.post('/activate-account', requirePermission('users.create'), activateAccount);
-router.get('/departments/:id', requirePermission('departments.view'), getDepartmentById);
-router.get('/bible-study-groups/:id', requirePermission('departments.view'), getBibleStudyGroupById);
+router.post('/new-believers', requirePermission('new_christian.register'), createNewBeliever);
+router.post('/new-believers/telegram/link', requirePermission('telegram.user.link'), createNewBelieverTelegramLink);
+router.post('/new-believers/telegram/verify', requirePermission('telegram.user.link'), verifyNewBelieverTelegramLink);
+router.get('/departments/:id', requirePermission('departments.view', 'staff.manage'), getDepartmentById);
+router.get('/bible-study-groups/:id', requirePermission('departments.view', 'programs.manage'), getBibleStudyGroupById);
+router.post('/departments/:id/join', requireUser, requirePermission('group.join'), joinDepartment);
+router.post('/bible-study-groups/:id/join', requireUser, requirePermission('group.join'), joinBibleStudyGroup);
 router.post('/telegram/messages/:id/replies', requirePermission('telegram.manage'), replyToTelegramMessage);
+router.post('/telegram/messages/:id/notes', requirePermission('telegram.manage'), addTelegramMessageNote);
 router.patch('/telegram/messages/:id', requirePermission('telegram.manage'), updateTelegramMessage);
 router.get('/telegram/messages', requirePermission('telegram.manage'), telegramInbox);
+router.get('/telegram/overview', requirePermission('telegram.manage'), telegramManagementOverview);
+router.get('/telegram/connection', requirePermission('telegram.manage'), checkTelegramConnection);
+router.post('/telegram/test', requirePermission('telegram.manage'), telegramAdminTestLimiter, sendTelegramAdminTest);
+router.get('/telegram/menu-items', requirePermission('telegram.manage'), listTelegramMenuItems);
+router.post('/telegram/menu-items', requirePermission('telegram.manage'), createTelegramMenuItem);
+router.patch('/telegram/menu-items/:id', requirePermission('telegram.manage'), updateTelegramMenuItem);
+router.delete('/telegram/menu-items/:id', requirePermission('telegram.manage'), deleteTelegramMenuItem);
+router.get('/telegram/auto-replies', requirePermission('telegram.manage'), listTelegramAutoReplies);
+router.post('/telegram/auto-replies', requirePermission('telegram.manage'), createTelegramAutoReply);
+router.patch('/telegram/auto-replies/:id', requirePermission('telegram.manage'), updateTelegramAutoReply);
+router.delete('/telegram/auto-replies/:id', requirePermission('telegram.manage'), deleteTelegramAutoReply);
+router.post('/telegram/auto-replies/preview', requirePermission('telegram.manage'), previewTelegramAutoReply);
 export default router;

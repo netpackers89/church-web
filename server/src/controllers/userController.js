@@ -4,9 +4,12 @@ import {
 	connectTelegramByToken,
 	createEmailChangeToken,
 	createTelegramLinkToken,
+	replaceTelegramLinkToken,
 	disconnectTelegram,
 	findUserById,
 	getTelegramLinkStatus,
+	getTelegramRecoveryStatus,
+	recoverTelegramConnection,
 	listUsers,
 	pool,
 	updateUserPassword,
@@ -18,9 +21,10 @@ import { config } from '../config/env.js';
 import { completeFollowupTelegramLink } from './newChristianController.js';
 import { sendMemberWelcomeTelegram } from '../services/memberWelcomeService.js';
 import { getEthiopianBirthDetails } from '../utils/ethiopianCalendar.js';
-import { sendEmailNotification } from '../services/emailService.js';
+import { sendEmailNotification } from '../email/index.js';
 import { normalizePaymentMethods, validatePaymentReference } from '../services/paymentMethods.js';
 import { isSafeImageUrl, uploadImageToImgbb } from '../services/imgbbService.js';
+import { sendTelegramNotification } from '../telegram/services/messaging.js';
 
 function fail(message, status = 400) {
 	return Object.assign(new Error(message), { status });
@@ -52,7 +56,9 @@ async function validateLocation(location, otherLocation) {
 }
 
 function publicProfile(user) {
-	const age = getEthiopianBirthDetails(user.birthDateEc, config.churchTimezone).age;
+	const age = user.birthDateEc
+		? getEthiopianBirthDetails(user.birthDateEc, config.churchTimezone).age
+		: null;
 	const { telegramChatId, ...safeUser } = user;
 	return { ...safeUser, age, telegramConnected: Boolean(telegramChatId) };
 }
@@ -63,8 +69,18 @@ function handleError(response, error) {
 	if (error.code === '23505' && String(error.constraint ?? '').includes('donations_payment_reference')) return response.status(409).json({ error: 'This transaction reference has already been submitted for that payment provider.' });
 	if (error.code === '23505' && String(error.constraint ?? '').includes('donations_single_resubmission')) return response.status(409).json({ error: 'A correction for this rejected submission has already been sent.' });
 	if (error.code === '23505') return response.status(409).json({ error: 'An account with that email, phone, or Telegram account already exists.' });
-	console.error('[users] request failed:', error.message);
-	return response.status(503).json({ error: 'The profile service is temporarily unavailable.' });
+	console.error('[users] request failed:', {
+		message: error.message,
+		code: error.code,
+		table: error.table,
+		column: error.column,
+		constraint: error.constraint,
+	});
+	const unavailableCodes = new Set(['ECONNREFUSED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', '53300']);
+	if (String(error.code ?? '').startsWith('08') || unavailableCodes.has(error.code)) {
+		return response.status(503).json({ error: 'The giving service is temporarily unavailable.' });
+	}
+	return response.status(500).json({ error: 'The request could not be completed.' });
 }
 
 export async function getMyProfile(request, response) {
@@ -89,8 +105,15 @@ export async function getUsers(_request, response) {
 
 export async function listMyNotifications(request, response) {
 	try {
-		const result = await pool.query(`SELECT id,title,body,image_url AS "imageUrl",link_url AS "linkUrl",created_at AS "createdAt",read_at AS "readAt" FROM user_notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100`, [request.user.id]);
-		return response.json({ success: true, data: result.rows });
+		const [result, unread] = await Promise.all([
+			pool.query(`SELECT id,title,body,image_url AS "imageUrl",link_url AS "linkUrl",
+				created_at AS "createdAt",read_at AS "readAt",notification_status AS status
+				FROM user_notifications WHERE user_id=$1 AND notification_status <> 'SKIPPED'
+				ORDER BY created_at DESC LIMIT 100`, [request.user.id]),
+			pool.query(`SELECT count(*)::int AS count FROM user_notifications
+				WHERE user_id=$1 AND read_at IS NULL AND notification_status NOT IN ('READ','SKIPPED')`, [request.user.id]),
+		]);
+		return response.json({ success: true, data: result.rows, meta: { unreadCount: unread.rows[0].count } });
 	} catch (error) { return handleError(response, error); }
 }
 
@@ -104,6 +127,16 @@ export async function markMyNotificationRead(request, response) {
 			RETURNING id,read_at AS "readAt"`, [id, request.user.id]);
 		if (!result.rowCount) throw fail('Notification not found.', 404);
 		return response.json({ success: true, data: result.rows[0] });
+	} catch (error) { return handleError(response, error); }
+}
+
+export async function markAllMyNotificationsRead(request, response) {
+	try {
+		const result = await pool.query(`UPDATE user_notifications
+			SET read_at=NOW(), notification_status='READ', updated_at=NOW()
+			WHERE user_id=$1 AND read_at IS NULL AND notification_status NOT IN ('READ','SKIPPED')
+			RETURNING id`, [request.user.id]);
+		return response.json({ success: true, data: { markedRead: result.rowCount } });
 	} catch (error) { return handleError(response, error); }
 }
 
@@ -265,10 +298,13 @@ export async function listMyGiving(request, response) {
 			       d.received_at AS "receivedAt",
 			       d.created_at AS "createdAt",
 			       d.payment_method_id AS "paymentMethodId",d.payment_provider AS "paymentProvider",
+			       d.campaign_payment_account_id::text AS "campaignPaymentAccountId",
 			       d.category_id AS "categoryId",d.campaign_id AS "campaignId",
-			       d.contributor_name AS "contributorName",d.donor_note AS "note",d.rejection_reason AS "rejectionReason",
+			       d.contributor_name AS "contributorName",d.donor_note AS "note",d.other_purpose AS "otherPurpose",
+			       d.payer_mode AS "payerMode",d.recipient_name AS "recipientName",d.recipient_phone AS "recipientPhone",
+			       d.recipient_member_id AS "recipientMemberId",d.rejection_reason AS "rejectionReason",
 			       d.reviewer_notes AS "reviewerNotes",d.receipt_number AS "receiptNumber",d.supersedes_donation_id AS "supersedesDonationId",
-			       c.name AS "categoryName",
+			       c.name AS "categoryName",c.category_code AS "categoryCode",
 			       cp.title AS "campaignTitle"
 			FROM donations d
 			LEFT JOIN donation_categories c ON c.id = d.category_id
@@ -289,36 +325,86 @@ export async function submitMyGiving(request, response) {
 		if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000000 || !/^\d+(\.\d{1,2})?$/.test(String(body.amount ?? ''))) throw fail('Enter a valid amount greater than zero with at most two decimal places.', 400);
 		if (body.accuracyConfirmed !== true) throw fail('Confirm that the submitted transaction details are accurate.', 400);
 		const paymentMethodId = typeof body.paymentMethodId === 'string' ? body.paymentMethodId.trim() : '';
-		if (!paymentMethodId) throw fail('Select a configured payment provider.', 400);
-		const settingsResult = await pool.query(`SELECT key,value FROM system_settings WHERE key IN ('paymentMethods','bank_account','bankName','accountHolder','accountNumber','bankBranch','transferInstructions','currency')`);
-		const paymentSettings = Object.fromEntries(settingsResult.rows.map((row) => [row.key,row.value]));
-		const paymentMethod = normalizePaymentMethods(paymentSettings.paymentMethods, paymentSettings).find((item) => item.id === paymentMethodId);
-		if (!paymentMethod) throw fail('This payment provider is not currently configured for public giving.', 404);
-		const currency = paymentMethod.currency;
 		const transferDateInput = typeof body.transferDate === 'string' ? body.transferDate.trim() : '';
-		if (!/^\d{4}-\d{2}-\d{2}$/.test(transferDateInput) || Number.isNaN(Date.parse(`${transferDateInput}T12:00:00Z`))) throw fail('Enter a valid payment date.', 400);
 		const transferDate = new Date(`${transferDateInput}T12:00:00.000Z`);
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(transferDateInput) || Number.isNaN(transferDate.valueOf()) || transferDate.toISOString().slice(0, 10) !== transferDateInput) throw fail('Enter a valid payment date.', 400);
 		const todayAtChurch = new Intl.DateTimeFormat('en-CA', { timeZone: config.churchTimezone }).format(new Date());
 		if (transferDateInput > todayAtChurch) throw fail('Payment date cannot be in the future.', 400);
 		const paymentReference = validatePaymentReference(body.paymentReference);
+		if (!paymentReference) throw fail('Enter a transaction reference or ID.', 400);
 		const categoryId = body.categoryId !== undefined && body.categoryId !== null && body.categoryId !== '' ? Number(body.categoryId) : null;
+		const categoryCode = typeof body.categoryCode === 'string' ? body.categoryCode.trim().toUpperCase() : '';
 		const campaignId = body.campaignId !== undefined && body.campaignId !== null && body.campaignId !== '' ? Number(body.campaignId) : null;
-		if (categoryId === null && campaignId === null) throw fail('Select a giving category or campaign.', 400);
+		const allowedCategoryCodes = new Set(['ASRATE', 'MEBA', 'BEKURAT_KEDAMYAT', 'MESWAET_KURBAN', 'MISGANA', 'METASABIYA', 'BUILDING_FUND', 'CHARITY_ALMS', 'FIKER_SETOTA', 'OTHER']);
+		if (categoryId === null && !categoryCode && campaignId === null) throw fail('Select a giving category or campaign.', 400);
+		if (categoryCode && !allowedCategoryCodes.has(categoryCode)) throw fail('Select a valid giving category.', 400);
+		if (categoryCode && categoryId !== null) throw fail('Choose either a category code or a legacy category ID, not both.', 400);
 		if (categoryId !== null && (!Number.isSafeInteger(categoryId) || categoryId < 1)) throw fail('Select a valid giving category.', 400);
 		if (campaignId !== null && (!Number.isInteger(campaignId) || campaignId <= 0)) throw fail('Select a valid campaign.', 400);
 		let resolvedCategoryId = categoryId;
+		if (categoryCode) {
+			const category = await pool.query('SELECT id FROM donation_categories WHERE category_code=$1 AND is_active=TRUE', [categoryCode]);
+			if (!category.rowCount) throw fail('This giving category is not currently available.', 404);
+			resolvedCategoryId = Number(category.rows[0].id);
+		}
+		const otherPurpose = typeof body.otherPurpose === 'string' ? body.otherPurpose.trim() : '';
+		if (categoryCode === 'OTHER' && !otherPurpose) throw fail('Describe the purpose for this contribution.', 400);
+		if (otherPurpose.length > 500) throw fail('Purpose must be 500 characters or fewer.', 400);
+		if (categoryCode !== 'OTHER' && otherPurpose) throw fail('A custom purpose is only allowed for the Other category.', 400);
 		if (campaignId !== null) {
 			const campaign = await pool.query('SELECT id,category_id FROM fundraising_campaigns WHERE id = $1 AND status = $2', [campaignId, 'ACTIVE']);
 			if (!campaign.rowCount) throw fail('The selected campaign is not currently active.', 404);
-			if (resolvedCategoryId !== null && campaign.rows[0].category_id !== null && Number(campaign.rows[0].category_id) !== resolvedCategoryId) throw fail('The selected campaign does not belong to the selected giving category.', 400);
-			resolvedCategoryId ??= campaign.rows[0].category_id;
+			if (categoryCode || categoryId !== null) throw fail('Select either a giving category or a fundraising campaign.', 400);
+			resolvedCategoryId = campaign.rows[0].category_id;
 		}
+		let paymentMethod;
+		let campaignPaymentAccountId = null;
+		if (campaignId !== null) {
+			const selectedAccountId = typeof body.campaignPaymentAccountId === 'string' ? body.campaignPaymentAccountId.trim() : String(body.campaignPaymentAccountId ?? '');
+			if (!/^[1-9]\d{0,18}$/.test(selectedAccountId)) throw fail('Select an active payment account for this campaign.', 400);
+			const selectedAccount = await pool.query(
+				`SELECT pa.id::text AS id,pa.name,pa.currency FROM campaign_payment_accounts pa
+				 JOIN fundraising_campaigns c ON c.id=pa.campaign_id
+				 WHERE pa.id=$1 AND pa.campaign_id=$2 AND pa.is_active=TRUE AND c.status='ACTIVE'`,
+				[selectedAccountId,campaignId],
+			);
+			if (!selectedAccount.rowCount) throw fail('This campaign payment account is no longer available.', 404);
+			campaignPaymentAccountId = selectedAccount.rows[0].id;
+			paymentMethod = {
+				id: `campaign-${campaignPaymentAccountId}`,
+				name: selectedAccount.rows[0].name,
+				currency: selectedAccount.rows[0].currency,
+			};
+		} else {
+			if (!paymentMethodId) throw fail('Select a configured payment provider.', 400);
+			const settingsResult = await pool.query(`SELECT key,value FROM system_settings WHERE key IN ('paymentMethods','bank_account','bankName','accountHolder','accountNumber','bankBranch','transferInstructions','currency')`);
+			const paymentSettings = Object.fromEntries(settingsResult.rows.map((row) => [row.key,row.value]));
+			paymentMethod = normalizePaymentMethods(paymentSettings.paymentMethods, paymentSettings).find((item) => item.id === paymentMethodId);
+			if (!paymentMethod) throw fail('This payment provider is not currently configured for public giving.', 404);
+		}
+		const currency = paymentMethod.currency;
 		if (resolvedCategoryId !== null) {
-			const category = await pool.query('SELECT id FROM donation_categories WHERE id=$1 AND is_active=TRUE', [resolvedCategoryId]);
+			const category = await pool.query('SELECT id FROM donation_categories WHERE id=$1 AND is_active=TRUE AND category_code IS NOT NULL', [resolvedCategoryId]);
 			if (!category.rowCount) throw fail('The selected giving category is not currently active.', 404);
 		}
 		const contributorName = typeof body.contributorName === 'string' ? body.contributorName.trim() : '';
 		if (contributorName.length > 160) throw fail('Contributor name must be 160 characters or fewer.');
+		const payerMode = body.payerMode === undefined ? 'SELF' : body.payerMode;
+		if (!['SELF', 'OTHER'].includes(payerMode)) throw fail('Select who this contribution is for.', 400);
+		const recipientName = typeof body.recipientName === 'string' ? body.recipientName.trim() : '';
+		const recipientPhone = typeof body.recipientPhone === 'string' ? body.recipientPhone.trim() : '';
+		const recipientMemberId = body.recipientMemberId === undefined || body.recipientMemberId === null || body.recipientMemberId === '' ? null : Number(body.recipientMemberId);
+		if (payerMode === 'OTHER') {
+			if (recipientName.length < 2 || recipientName.length > 160) throw fail('Enter the recipient’s full name.', 400);
+			if (recipientPhone.length < 5 || recipientPhone.length > 40) throw fail('Enter a valid recipient phone number.', 400);
+			if (recipientMemberId !== null) {
+				if (!Number.isSafeInteger(recipientMemberId) || recipientMemberId < 1) throw fail('Enter a valid recipient member ID.', 400);
+				const recipient = await pool.query('SELECT id FROM users WHERE id=$1', [recipientMemberId]);
+				if (!recipient.rowCount) throw fail('The recipient member ID could not be found.', 404);
+			}
+		} else if (recipientName || recipientPhone || recipientMemberId !== null) {
+			throw fail('Recipient details are only allowed when paying for someone else.', 400);
+		}
 		const note = typeof body.note === 'string' ? body.note.trim() : '';
 		if (note.length > 2000) throw fail('Note must be 2,000 characters or fewer.');
 		const supersedesDonationId = body.supersedesDonationId === undefined || body.supersedesDonationId === null || body.supersedesDonationId === '' ? null : Number(body.supersedesDonationId);
@@ -328,10 +414,10 @@ export async function submitMyGiving(request, response) {
 			if (!rejectedRecord.rowCount) throw fail('You can only correct one of your own rejected contributions.', 404);
 		}
 		const result = await pool.query(`
-			INSERT INTO donations (user_id, category_id, campaign_id, amount, currency, payment_reference, status, recorded_by, received_at, payment_method_id, payment_provider, contributor_name, donor_note, supersedes_donation_id)
-			VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $1, $7, $8, $9, $10, $11, $12)
+			INSERT INTO donations (user_id, category_id, campaign_id, amount, currency, payment_reference, status, recorded_by, received_at, payment_method_id, payment_provider, contributor_name, donor_note, supersedes_donation_id, other_purpose, payer_mode, recipient_name, recipient_phone, recipient_member_id, campaign_payment_account_id)
+			VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $1, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 			RETURNING id, amount, currency, status, payment_reference AS "paymentReference", received_at AS "receivedAt", payment_provider AS "paymentProvider", created_at AS "createdAt", supersedes_donation_id AS "supersedesDonationId"
-		`, [request.user.id, resolvedCategoryId, campaignId, amount, currency, paymentReference, transferDate, paymentMethod.id, paymentMethod.name, contributorName || null, note || null, supersedesDonationId]);
+		`, [request.user.id, resolvedCategoryId, campaignId, amount, currency, paymentReference, transferDate, paymentMethod.id, paymentMethod.name, contributorName || null, note || null, supersedesDonationId, otherPurpose || null, payerMode, payerMode === 'OTHER' ? recipientName : null, payerMode === 'OTHER' ? recipientPhone : null, payerMode === 'OTHER' ? recipientMemberId : null, campaignPaymentAccountId]);
 		return response.status(201).json({
 			success: true,
 			message: 'Your contribution details have been submitted successfully. Our finance team will review your transaction, usually within 24 hours. You will be notified when the review is completed.',
@@ -343,11 +429,15 @@ export async function submitMyGiving(request, response) {
 }
 
 export async function createMyTelegramLinkToken(request, response) {
+	return issueTelegramLinkToken(request, response, createTelegramLinkToken, 'Open the link and press Start in the official church bot to connect your account.');
+}
+
+async function issueTelegramLinkToken(request, response, issueToken, message) {
 	try {
 		if (!config.telegram.token || !config.telegram.username) throw fail('Telegram linking is not configured. Ask the church administrator.', 503);
 		const token = randomBytes(32).toString('base64url');
 		const tokenHash = createHash('sha256').update(token).digest('hex');
-		await createTelegramLinkToken(request.user.id, tokenHash);
+		await issueToken(request.user.id, tokenHash);
 		const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 		return response.status(201).json({
 			token,
@@ -355,11 +445,44 @@ export async function createMyTelegramLinkToken(request, response) {
 			deepLink: `https://t.me/${config.telegram.username}?start=${token}`,
 			expiresAt,
 			expiresInSeconds: 300,
-			message: 'Open the link and press Start in the official church bot to connect your account.',
+			message,
 		});
 	} catch (error) {
 		return handleError(response, error);
 	}
+}
+
+export async function replaceMyTelegram(request, response) {
+	return issueTelegramLinkToken(
+		request,
+		response,
+		replaceTelegramLinkToken,
+		'Your previous Telegram connection was released. Open the link and press Start in the official church bot to connect the replacement account.',
+	);
+}
+
+export async function getMyTelegramRecoveryStatus(request, response) {
+	try {
+		const token = typeof request.body?.token === 'string' ? request.body.token : '';
+		if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) throw fail('A valid Telegram recovery token is required.');
+		const data = await getTelegramRecoveryStatus(request.user.id, createHash('sha256').update(token).digest('hex'));
+		return response.json({ success: true, data });
+	} catch (error) { return handleError(response, error); }
+}
+
+export async function confirmMyTelegramRecovery(request, response) {
+	try {
+		if (!config.telegram.token || !config.telegram.username) throw fail('Telegram linking is not configured. Ask the church administrator.', 503);
+		const token = typeof request.body?.token === 'string' ? request.body.token : '';
+		const password = typeof request.body?.password === 'string' ? request.body.password : '';
+		if (!/^[A-Za-z0-9_-]{40,60}$/.test(token) || !password) throw fail('A valid recovery token and your current password are required.');
+		const user = await pool.query('SELECT password_hash,account_status FROM users WHERE id=$1', [request.user.id]);
+		if (!user.rowCount || user.rows[0].account_status !== 'ACTIVE' || !(await bcrypt.compare(password, user.rows[0].password_hash))) throw fail('Your current password is incorrect.', 401);
+		const freshToken = randomBytes(32).toString('base64url');
+		await recoverTelegramConnection(request.user.id, createHash('sha256').update(token).digest('hex'), createHash('sha256').update(freshToken).digest('hex'));
+		const deepLink = `https://t.me/${config.telegram.username}?start=${freshToken}`;
+		return response.json({ success: true, message: 'Telegram was disconnected. Open Telegram to connect it to this church profile.', deepLink, token: freshToken, expiresInSeconds: 300 });
+	} catch (error) { return handleError(response, error); }
 }
 
 export async function getMyTelegramLinkStatus(request, response) {
@@ -374,8 +497,67 @@ export async function getMyTelegramLinkStatus(request, response) {
 	}
 }
 
+export async function testMyTelegram(request, response) {
+	try {
+		const user = await findUserById(request.user.id);
+		if (!user || user.accountStatus !== 'ACTIVE') throw fail('Account unavailable.', 401);
+		if (!user.telegramChatId) throw fail('Connect your Telegram account before sending a test message.', 409);
+		if (!config.telegram.token) throw fail('Telegram notifications are not configured on the server.', 503);
+		try {
+			await sendTelegramNotification({
+				chatId: user.telegramChatId,
+				text: `✅ Test message from ${config.branding.churchName}: your Telegram connection is working.`,
+			});
+		} catch (error) {
+			console.error('[users] Telegram connection test failed:', error.message);
+			return response.status(502).json({
+				error: 'Telegram could not deliver the test message. Open the official church bot and press Start, then try again.',
+			});
+		}
+		return response.json({ success: true, message: 'Test message delivered to your linked Telegram account.' });
+	} catch (error) {
+		return handleError(response, error);
+	}
+}
+
+export async function disconnectMyTelegram(request, response) {
+	try {
+		const password = typeof request.body?.password === 'string' ? request.body.password : '';
+		if (!password) throw fail('Enter your current password to disconnect Telegram.', 400);
+		const user = await pool.query('SELECT password_hash,account_status,telegram_chat_id FROM users WHERE id=$1', [request.user.id]);
+		if (!user.rowCount || user.rows[0].account_status !== 'ACTIVE') throw fail('Account unavailable.', 401);
+		if (!(await bcrypt.compare(password, user.rows[0].password_hash))) throw fail('Your current password is incorrect.', 401);
+
+		const chatId = user.rows[0].telegram_chat_id;
+		if (chatId) {
+			const conflict = await pool.query(
+				`SELECT ta.id FROM telegram_accounts ta WHERE ta.chat_id = $1 AND ta.user_id IS NOT NULL AND ta.user_id <> $2 LIMIT 1`,
+				[String(chatId), request.user.id],
+			);
+			if (conflict.rowCount) {
+				return response.status(409).json({
+					success: false,
+					connected: true,
+					message: 'This Telegram account is connected to a different church profile. Sign in to that church profile to disconnect it, or contact the church office for assisted recovery.',
+				});
+			}
+		}
+
+		await disconnectTelegram(request.user.id);
+		return response.json({
+			success: true,
+			connected: false,
+			message: 'Telegram disconnected successfully.',
+		});
+	} catch (error) { return handleError(response, error); }
+}
+
 export async function unlinkMyTelegram(request, response) {
 	try {
+		const password = typeof request.body?.password === 'string' ? request.body.password : '';
+		if (!password) throw fail('Enter your current password to disconnect Telegram.');
+		const user = await pool.query('SELECT password_hash,account_status FROM users WHERE id=$1', [request.user.id]);
+		if (!user.rowCount || user.rows[0].account_status !== 'ACTIVE' || !(await bcrypt.compare(password, user.rows[0].password_hash))) throw fail('Your current password is incorrect.', 401);
 		await disconnectTelegram(request.user.id);
 		return response.json({ message: 'Telegram account disconnected. Telegram notifications have been disabled.' });
 	} catch (error) {

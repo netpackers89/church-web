@@ -3,7 +3,6 @@ import { pool } from '../config/db.js';
 import { DEFAULT_PERMISSION_CATALOG, ROLE_PERMISSION_MAP, expandPermissionAliases } from '../services/permissionCatalog.js';
 
 const roles = ['SYSTEM_OWNER', 'ADMIN', 'PASTOR', 'LEADER', 'FINANCE', 'STAFF', 'MEMBER', 'PARTNER', 'REGISTRAR'];
-const departments = ['Worship', 'Children', 'Youth', 'Outreach', 'Media', 'Prayer'];
 const templates = [
 	['daily-verse', 'TELEGRAM', 'Daily verse', '{{reference}}\n\n{{text}}'],
 	['program-reminder', 'TELEGRAM', 'Program reminder', '{{program}} starts at {{startTime}}.'],
@@ -32,7 +31,6 @@ try {
 				ON CONFLICT DO NOTHING`, [role.rows[0].id, permissionCode]);
 		}
 	}
-	for (const name of departments) await client.query('INSERT INTO departments (name) VALUES ($1) ON CONFLICT (name) DO NOTHING', [name]);
 	for (const [code, channel, subject, body] of templates) {
 		await client.query(`INSERT INTO notification_templates (code, channel, subject_template, body_template)
 			VALUES ($1,$2,$3,$4) ON CONFLICT (code) DO UPDATE SET subject_template = EXCLUDED.subject_template, body_template = EXCLUDED.body_template`, [code, channel, subject, body]);

@@ -15,12 +15,18 @@ export default function TelegramIntegrationPanel({ compact = false }) {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [testingTelegram, setTestingTelegram] = useState(false);
+  const [testMessage, setTestMessage] = useState('');
   const [link, setLink] = useState(null);
   const [status, setStatus] = useState('NOT_CONNECTED');
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [telegramPreference, setTelegramPreference] = useState(false);
   const [savingPreference, setSavingPreference] = useState(false);
   const [flowError, setFlowError] = useState('');
+  const [recoveryToken] = useState(() => new URLSearchParams(window.location.search).get('telegramRecovery') || '');
+  const [recovery, setRecovery] = useState(null);
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [recovering, setRecovering] = useState(false);
   const polling = useRef(false);
 
   useEffect(() => {
@@ -38,6 +44,31 @@ export default function TelegramIntegrationPanel({ compact = false }) {
     });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!recoveryToken) return undefined;
+    let active = true;
+    userService.telegramRecoveryStatus(recoveryToken)
+      .then((response) => { if (active) setRecovery({ ...(response.data?.data ?? response.data ?? {}), error: '' }); })
+      .catch((failure) => { if (active) setRecovery({ error: failure.message || 'This Telegram recovery link is invalid or expired.' }); });
+    return () => { active = false; };
+  }, [recoveryToken]);
+
+  async function confirmRecovery(event) {
+    event.preventDefault();
+    setRecovering(true);
+    setFlowError('');
+    try {
+      const response = await userService.confirmTelegramRecovery(recoveryToken, recoveryPassword);
+      const deepLink = response.data?.deepLink;
+      if (!deepLink) throw new Error('The server did not return a secure Telegram connection link.');
+      setRecovery({ complete: true, deepLink });
+      setRecoveryPassword('');
+      window.history.replaceState({}, '', window.location.pathname);
+    } catch (failure) {
+      setRecovery((current) => ({ ...current, error: failure.message || 'Telegram recovery could not be completed.' }));
+    } finally { setRecovering(false); }
+  }
 
   useEffect(() => {
     if (!link || status !== 'WAITING') return undefined;
@@ -86,13 +117,29 @@ export default function TelegramIntegrationPanel({ compact = false }) {
     };
   }, [link, status, success]);
 
-  async function connect() {
+  async function connect(replace = false) {
     setConnecting(true);
     setFlowError('');
-    setStatus('CREATING');
+    if (!replace) setStatus('CREATING');
     const tab = window.open('about:blank', '_blank');
     if (tab) tab.opener = null;
     try {
+      if (replace) {
+        const response = await userService.telegramReplace();
+        setProfile((current) => ({ ...current, telegramConnected: false, telegramUsername: null, telegramLinkedAt: null, notifyTelegram: false }));
+        setTelegramPreference(false);
+        setStatus('NOT_CONNECTED');
+        const result = response.data ?? {};
+        const deepLink = result.deepLink || result.url;
+        const token = result.token;
+        if (!deepLink || !token) throw new Error('The server did not return a secure Telegram link.');
+        const expiresAt = result.expiresAt ? new Date(result.expiresAt).getTime() : Date.now() + (result.expiresInSeconds ?? 300) * 1000;
+        setLink({ token, deepLink, expiresAt });
+        setSecondsLeft(Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)));
+        setStatus('WAITING');
+        if (tab) tab.location.replace(deepLink);
+        return;
+      }
       const response = await userService.telegramLinkToken();
       const result = response.data ?? {};
       const deepLink = result.deepLink || result.url;
@@ -129,19 +176,37 @@ export default function TelegramIntegrationPanel({ compact = false }) {
 
   async function disconnect() {
     if (!window.confirm('Disconnect Telegram and stop Telegram notifications for your account?')) return;
+    const password = window.prompt('Enter your current church-account password to disconnect Telegram.');
+    if (!password) return;
     setDisconnecting(true);
     setFlowError('');
     try {
-      await userService.telegramUnlink();
+      await userService.telegramDisconnect(password);
       setProfile((current) => ({ ...current, telegramConnected: false, telegramUsername: null, telegramLinkedAt: null, notifyTelegram: false }));
       setTelegramPreference(false);
       setStatus('NOT_CONNECTED');
       setLink(null);
+      setTestMessage('');
       success('Telegram disconnected');
     } catch (failure) {
       setFlowError(failure.message || 'Telegram could not be disconnected.');
     } finally {
       setDisconnecting(false);
+    }
+  }
+
+  async function testTelegram() {
+    setTestingTelegram(true);
+    setFlowError('');
+    setTestMessage('');
+    try {
+      const response = await userService.testMyTelegram();
+      setTestMessage(response.data?.message || 'Test message delivered to your linked Telegram account.');
+      success('Telegram test delivered', 'Check your Telegram chat with the official church bot.');
+    } catch (failure) {
+      setFlowError(failure.message || 'Telegram could not deliver the test message.');
+    } finally {
+      setTestingTelegram(false);
     }
   }
 
@@ -155,7 +220,7 @@ export default function TelegramIntegrationPanel({ compact = false }) {
           <div className="telegram-settings-title-row">
             <h3 id="telegram-settings-title">Telegram</h3>
             <span className={`telegram-settings-badge${connected ? ' is-connected' : ''}`} role="status">
-              {connected ? <><Check size={13} aria-hidden="true" />Verified</> : 'Not connected'}
+              {connected ? <><Check size={13} aria-hidden="true" />Connected</> : 'Not connected'}
             </span>
           </div>
           <p>Link Telegram to receive church updates through the official bot.</p>
@@ -163,6 +228,14 @@ export default function TelegramIntegrationPanel({ compact = false }) {
       </header>
 
       {flowError ? <Alert variant="warning">{flowError}</Alert> : null}
+      {testMessage ? <Alert variant="success">{testMessage}</Alert> : null}
+      {recoveryToken && recovery ? (
+        <div className="telegram-settings-waiting" aria-live="polite">
+          {recovery.error ? <Alert variant="warning">{recovery.error}</Alert>
+            : recovery.complete ? <><strong>✅ Telegram disconnected successfully</strong><p>Your church profile, memberships, and giving history were not changed. Open Telegram to connect this account again.</p><a href={recovery.deepLink}><ExternalLink size={15} aria-hidden="true" />Connect my church account</a></>
+              : <form className="stack" onSubmit={confirmRecovery}><strong>Recover your Telegram connection</strong><p>{recovery.connected ? `Confirm the current password for ${recovery.profileName || 'this church profile'} to disconnect its Telegram link.` : 'No active Telegram link was found. Confirm your password to create a fresh connection link.'}</p><label className="field"><span>Current password</span><input className="input" type="password" autoComplete="current-password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} required /></label><Button type="submit" loading={recovering}>Verify password and continue</Button></form>}
+        </div>
+      ) : null}
       {loading ? <p className="telegram-settings-muted" role="status">Checking connection…</p> : null}
 
       {connected ? (
@@ -179,6 +252,10 @@ export default function TelegramIntegrationPanel({ compact = false }) {
             <span>Receive Telegram notifications</span>
           </label>
           <Button type="button" variant="secondary" size="sm" loading={disconnecting} iconLeft={<Unlink size={15} />} onClick={disconnect}>Disconnect Telegram</Button>
+          <Button type="button" variant="secondary" size="sm" loading={connecting} disabled={disconnecting || testingTelegram} iconLeft={<MessageCircle size={15} />} onClick={() => {
+            if (window.confirm('Disconnect the current Telegram account and start linking a replacement?')) void connect(true);
+          }}>Replace Telegram account</Button>
+          <Button type="button" variant="secondary" size="sm" loading={testingTelegram} disabled={disconnecting} iconLeft={<MessageCircle size={15} />} onClick={testTelegram}>Send test message</Button>
         </div>
       ) : status === 'WAITING' && link ? (
         <div className="telegram-settings-waiting" role="status" aria-live="polite">

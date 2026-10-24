@@ -22,7 +22,7 @@ export default function MyEventsPage() {
         </div>
         <div className="page-actions">
           <Link to="/me/calendar" className="btn btn-secondary btn-sm"><CalendarDays size={15} /> Calendar view</Link>
-          <Link to="/events" className="btn btn-ghost btn-sm" iconRight={<ArrowRight size={14} />}>Public events</Link>
+          <Link to="/programs" className="btn btn-ghost btn-sm" iconRight={<ArrowRight size={14} />}>Public programs</Link>
         </div>
       </div>
 
@@ -35,7 +35,7 @@ export default function MyEventsPage() {
             icon={<CalendarDays size={30} />}
             title="No upcoming events"
             description="New events are announced regularly — check the public events page or contact the office."
-            action={<Button to="/events" variant="secondary">Browse all events</Button>}
+            action={<Button to="/programs" variant="secondary">Browse programs</Button>}
           />
         }
       >

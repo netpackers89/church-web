@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { siteConfig } from '../../utils/siteConfig.js';
+import ReliableImage from './ReliableImage.jsx';
 
 /**
  * Church brand mark + wordmark. Uses the real logo asset if present in the
@@ -17,7 +18,7 @@ export default function Brand({
   const inner = (
     <>
       <span className="brand-mark" aria-hidden="true">
-        {logo ? <img src={logo} alt="" /> : monogram}
+        {logo ? <ReliableImage src={logo} alt="" fallback={monogram} /> : monogram}
       </span>
       <span className="brand-text">
         <strong>{name}</strong>
@@ -28,10 +29,13 @@ export default function Brand({
 
   const Tag = to ? Link : 'span';
   return (
-    <Tag to={to || undefined} className={`brand ${className}`} aria-label={to ? `${name} — home` : undefined}>
+    <Tag
+      to={to || undefined}
+      className={`brand ${className}`}
+      aria-label={to ? `${name} — home` : undefined}
+      onClick={to ? () => window.dispatchEvent(new Event('church:splash-intro')) : undefined}
+    >
       {inner}
     </Tag>
   );
 }
-
-

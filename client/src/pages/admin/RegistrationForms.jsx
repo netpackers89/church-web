@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { adminService, unwrap } from "../../services/api.js";
 import useAsync from "../../hooks/useAsync.js";
 import Alert from "../../components/ui/Alert.jsx";
@@ -6,7 +6,7 @@ import Button from "../../components/ui/Button.jsx";
 import Input from "../../components/ui/Input.jsx";
 import ImageUploadField from "../../components/ui/ImageUploadField.jsx";
 import { contentService } from "../../services/index.js";
-import { useToast } from "../../components/feedback/ToastProvider.jsx";
+import CommunityLinksFields from "../../components/groups/CommunityLinksFields.jsx";
 
 const blankDepartment = {
   name: "",
@@ -14,23 +14,24 @@ const blankDepartment = {
   description: "",
   logoUrl: "",
   bannerUrl: "",
-  leaderName: "",
-  leaderPhone: "",
+  leaderUserId: "",
   contactEmail: "",
+  meetingLocation: "",
+  meetingSchedule: "",
   visibility: "PUBLIC",
   isActive: true,
   telegramType: "none",
   telegramUsername: "",
   telegramPublicLink: "",
   telegramInviteLink: "",
+  communityLinks: [],
 };
 
 const blankGroup = {
   name: "",
   description: "",
   groupEmail: "",
-  leaderName: "",
-  leaderPhone: "",
+  leaderUserId: "",
   locationText: "",
   googleMapsLink: "",
   meetingSchedule: "",
@@ -44,6 +45,7 @@ const blankGroup = {
   telegramUsername: "",
   telegramPublicLink: "",
   telegramInviteLink: "",
+  communityLinks: [],
 };
 
 function uploadLogo(file, name) {
@@ -65,16 +67,65 @@ function uploadProfile(file, name) {
   });
 }
 
-function RegistrationForm({ kind, onSaved }) {
+function leaderLoadMessage(error) {
+  if (error?.status === 401) return "Your session has expired. Sign in again to search member accounts.";
+  if (error?.status === 403) return "Your account does not have permission to assign a leader.";
+  if (error?.status >= 500) return "The server could not load member accounts. Please retry in a moment.";
+  if (!error?.status) return "Could not connect to the server. Check your connection and retry.";
+  return error.message || "Member accounts could not be loaded.";
+}
+
+function RegistrationForm({ kind, onSaved, initialValue = null, onCancel }) {
   const isDepartment = kind === "department";
-  const { success } = useToast();
-  const [form, setForm] = useState(
-    isDepartment ? { ...blankDepartment } : { ...blankGroup },
-  );
+  const blankForm = isDepartment ? blankDepartment : blankGroup;
+  const [form, setForm] = useState(() => ({
+    ...blankForm,
+    ...(initialValue || {}),
+    leaderUserId: initialValue?.leaderUserId ?? "",
+    meetingLocation: initialValue?.meetingLocation ?? initialValue?.locationText ?? initialValue?.location ?? "",
+    groupProfileImage: initialValue?.groupProfileImage ?? initialValue?.logoUrl ?? "",
+    bannerImage: initialValue?.bannerImage ?? initialValue?.bannerUrl ?? "",
+  }));
+  const [leaderQuery, setLeaderQuery] = useState("");
+  const [leaderSearch, setLeaderSearch] = useState("");
+  const [isLeaderMenuOpen, setIsLeaderMenuOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [mapsPreview, setMapsPreview] = useState("");
+  const leaderSelectRef = useRef(null);
+  const leaders = useAsync(async () => (
+    unwrap(await adminService.groupLeaderCandidates({ search: leaderSearch })) ?? []
+  ), [leaderSearch]);
+  const leaderLabel = (leader) => {
+    const name = leader.name || "Unnamed account";
+    const accountType = String(leader.role ?? "MEMBER").toUpperCase() === "MEMBER"
+      ? "Member"
+      : "Staff";
+    return `${name} · ${accountType}`;
+  };
+  const candidates = Array.isArray(leaders.data) ? leaders.data : [];
+  const selectedLeader = candidates.find(
+    (leader) => String(leader.id) === String(form.leaderUserId),
+  ) || (initialValue?.leaderUserId && String(initialValue.leaderUserId) === String(form.leaderUserId)
+    ? { id: initialValue.leaderUserId, name: initialValue.leaderName, role: initialValue.leaderRole }
+    : null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLeaderSearch(leaderQuery.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [leaderQuery]);
+
+  useEffect(() => {
+    if (!isLeaderMenuOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!leaderSelectRef.current?.contains(event.target)) setIsLeaderMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [isLeaderMenuOpen]);
 
   const setField = (key, value) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -112,25 +163,35 @@ function RegistrationForm({ kind, onSaved }) {
     setSaving(true);
     setError("");
     setSaved("");
+    let saveConfirmed = false;
     try {
-      const payload = { ...form };
+      const payload = Object.fromEntries(
+        Object.entries(form).filter(([key]) => !["leaderPhone", "leaderEmail"].includes(key)),
+      );
       if (!isDepartment)
         payload.capacity =
           payload.capacity === "" ? null : Number(payload.capacity);
       const result = isDepartment
-        ? await adminService.createDepartment(payload)
-        : await adminService.createBibleStudyGroup(payload);
+        ? initialValue
+          ? await adminService.updateDepartment(initialValue.id, payload)
+          : await adminService.createDepartment(payload)
+        : initialValue
+          ? await adminService.updateBibleStudyGroup(initialValue.id, payload)
+          : await adminService.createBibleStudyGroup(payload);
       const record = unwrap(result);
-      setSaved(
-        `${isDepartment ? "Department" : "Bible study group"} “${record?.name || form.name}” created.`,
-      );
-      setForm(isDepartment ? { ...blankDepartment } : { ...blankGroup });
-      if (onSaved) onSaved();
+      saveConfirmed = true;
+      setSaved(`${isDepartment ? "Department" : "Bible study group"} “${record?.name || form.name}” ${initialValue ? "updated" : "created"}.`);
+      if (!initialValue) {
+        setForm({ ...blankForm });
+        setLeaderQuery("");
+        setLeaderSearch("");
+      }
+      if (onSaved) await onSaved();
     } catch (submitError) {
-      setError(
-        submitError.message ||
-          `Could not create the ${isDepartment ? "department" : "Bible study group"}.`,
-      );
+      setError(saveConfirmed
+        ? `Saved successfully, but the list could not refresh. ${submitError.message || "Refresh the page to see the saved item."}`
+        : submitError.message ||
+          `Could not create the ${isDepartment ? "department" : "Bible study group"}.`);
     } finally {
       setSaving(false);
     }
@@ -201,24 +262,106 @@ function RegistrationForm({ kind, onSaved }) {
           onChange={(e) => setField("description", e.target.value)}
         />
 
-        <div className="reg-grid">
-          <div className="reg-field">
-            <Input
-              label="Leader name"
-              placeholder="Community leader"
-              value={form.leaderName}
-              onChange={(e) => setField("leaderName", e.target.value)}
-            />
+        <div className="reg-field">
+          <label htmlFor="group-leader-search">Assigned leader</label>
+          <div className="relative" ref={leaderSelectRef}>
+            <button
+              id="group-leader-search"
+              type="button"
+              className="select flex w-full items-center justify-between gap-3 text-left"
+              aria-haspopup="listbox"
+              aria-expanded={isLeaderMenuOpen}
+              onClick={() => {
+                setLeaderQuery("");
+                setLeaderSearch("");
+                setIsLeaderMenuOpen((open) => !open);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && isLeaderMenuOpen) {
+                  event.stopPropagation();
+                  setIsLeaderMenuOpen(false);
+                }
+              }}
+            >
+              <span className={selectedLeader ? "truncate" : "truncate text-slate-500"}>
+                {selectedLeader ? leaderLabel(selectedLeader) : "Choose a registered member or staff"}
+              </span>
+              <span aria-hidden="true" className="text-slate-500">{isLeaderMenuOpen ? "⌃" : "⌄"}</span>
+            </button>
+
+            {isLeaderMenuOpen ? (
+              <div
+                className="absolute z-50 mt-2 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.stopPropagation();
+                    setIsLeaderMenuOpen(false);
+                  }
+                }}
+              >
+                <div className="border-b border-slate-100 p-3">
+                  <Input
+                    label="Search members or staff"
+                    type="search"
+                    placeholder="Type a name to search"
+                    value={leaderQuery}
+                    onChange={(event) => setLeaderQuery(event.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto p-1.5" role="listbox" aria-label="Registered members and staff">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={!form.leaderUserId}
+                    className="w-full rounded-lg px-3 py-2.5 text-left text-sm text-slate-600 hover:bg-slate-50"
+                    onClick={() => {
+                      setField("leaderUserId", "");
+                      setIsLeaderMenuOpen(false);
+                    }}
+                  >
+                    No leader assigned
+                  </button>
+                  {leaders.loading ? (
+                    <p className="px-3 py-4 text-sm text-slate-500" role="status">Searching registered accounts…</p>
+                  ) : leaders.error ? (
+                    <div className="space-y-2 px-3 py-4 text-sm">
+                      <p className="text-amber-800">Registered accounts could not be loaded: {leaderLoadMessage(leaders.error)}</p>
+                      <Button type="button" size="sm" variant="secondary" onClick={leaders.reload}>Try again</Button>
+                    </div>
+                  ) : candidates.length ? (
+                    <>
+                      {candidates.map((leader) => (
+                        <button
+                          key={leader.id}
+                          type="button"
+                          role="option"
+                          aria-selected={String(leader.id) === String(form.leaderUserId)}
+                          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-blue-50"
+                          onClick={() => {
+                            setField("leaderUserId", String(leader.id));
+                            setIsLeaderMenuOpen(false);
+                          }}
+                        >
+                          <span className="truncate">{leaderLabel(leader)}</span>
+                          {String(leader.id) === String(form.leaderUserId) ? <span aria-hidden="true" className="text-blue-700">✓</span> : null}
+                        </button>
+                      ))}
+                      {leaderSearch && candidates.length === 100 ? (
+                        <p className="px-3 py-2 text-xs text-slate-500">Showing the first 100 matches. Add more letters to narrow your search.</p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="px-3 py-4 text-sm text-slate-500">
+                      {leaderSearch ? "No registered accounts match that search." : "No active registered accounts are available."}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
-          <div className="reg-field">
-            <Input
-              label="Leader phone"
-              type="tel"
-              placeholder="+251912345678"
-              value={form.leaderPhone}
-              onChange={(e) => setField("leaderPhone", e.target.value)}
-            />
-          </div>
+          <span className="hint">Select an existing member or staff account. Search by name if the list is long.</span>
+          {leaders.error && !isLeaderMenuOpen ? <Alert variant="warning">Registered accounts could not be loaded: {leaderLoadMessage(leaders.error)}</Alert> : null}
         </div>
 
         {isDepartment ? (
@@ -231,6 +374,24 @@ function RegistrationForm({ kind, onSaved }) {
                 value={form.contactEmail}
                 onChange={(e) => setField("contactEmail", e.target.value)}
               />
+            </div>
+            <div className="reg-grid">
+              <div className="reg-field">
+                <Input
+                  label="Department meeting location"
+                  placeholder="Church hall / neighborhood"
+                  value={form.meetingLocation}
+                  onChange={(e) => setField("meetingLocation", e.target.value)}
+                />
+              </div>
+              <div className="reg-field">
+                <Input
+                  label="Department meeting schedule"
+                  placeholder="Every Saturday at 10:00"
+                  value={form.meetingSchedule}
+                  onChange={(e) => setField("meetingSchedule", e.target.value)}
+                />
+              </div>
             </div>
             <div className="reg-grid">
               <div className="reg-field">
@@ -373,6 +534,13 @@ function RegistrationForm({ kind, onSaved }) {
         </div>
 
         <div className="reg-note">
+          <CommunityLinksFields
+            value={form.communityLinks}
+            onChange={(communityLinks) => setField("communityLinks", communityLinks)}
+          />
+        </div>
+
+        <div className="reg-note">
           <h3 className="reg-title" style={{ marginBottom: "0.3rem" }}>
             Telegram destination
           </h3>
@@ -437,26 +605,24 @@ function RegistrationForm({ kind, onSaved }) {
             loading={saving}
             disabled={saving}
           >
-            {saving
-              ? "Creating…"
-              : `Create ${isDepartment ? "Department" : "Bible study group"}`}
+            {saving ? (initialValue ? "Saving…" : "Creating…") : `${initialValue ? "Save" : "Create"} ${isDepartment ? "Department" : "Bible study group"}`}
           </Button>
+          {onCancel ? <Button type="button" variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button> : null}
         </div>
       </div>
     </form>
   );
 }
 
-export function DepartmentRegistrationForm() {
-  return <RegistrationForm kind="department" />;
+export function DepartmentRegistrationForm(props) {
+  return <RegistrationForm kind="department" {...props} />;
 }
 
-export function BibleStudyGroupRegistrationForm() {
-  return <RegistrationForm kind="group" />;
+export function BibleStudyGroupRegistrationForm(props) {
+  return <RegistrationForm kind="group" {...props} />;
 }
 
 export function OrganizationRegistrationForm({ onSaved }) {
-  const { success } = useToast();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [isPublic, setIsPublic] = useState(true);

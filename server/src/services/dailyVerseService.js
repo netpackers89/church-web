@@ -2,6 +2,8 @@ import cron from 'node-cron';
 import { pool } from '../config/db.js';
 import { config } from '../config/env.js';
 
+let dailyVerseTask;
+
 export function churchDate(date = new Date()) {
 	const values = new Intl.DateTimeFormat('en-CA', { timeZone: config.churchTimezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
 	const part = (type) => values.find((item) => item.type === type)?.value;
@@ -36,9 +38,16 @@ export async function publishAutomaticDailyVerse(forDate = churchDate()) {
 }
 
 export function startDailyVerseScheduler() {
+	if (dailyVerseTask) return dailyVerseTask;
 	// Safe to execute more than once: the database partial unique index is the
 	// final idempotency guard, even with multiple application processes.
-	return cron.schedule('5 0 * * *', () => {
+	dailyVerseTask = cron.schedule('5 0 * * *', () => {
 		void publishAutomaticDailyVerse().catch((error) => console.error('[daily-verse] publication failed:', error.message));
 	}, { timezone: config.churchTimezone });
+	return dailyVerseTask;
+}
+
+export function stopDailyVerseScheduler() {
+	dailyVerseTask?.stop();
+	dailyVerseTask = undefined;
 }

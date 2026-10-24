@@ -63,6 +63,20 @@ CREATE INDEX IF NOT EXISTS idx_departments_telegram_status
   WHERE telegram_connection_status <> 'UNVERIFIED';
 
 -- ---- bible_study_groups: add fields required by the public registration form ----
+CREATE TABLE IF NOT EXISTS bible_study_groups (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  description TEXT,
+  leader_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  location_id BIGINT REFERENCES program_locations(id) ON DELETE SET NULL,
+  meeting_schedule TEXT,
+  capacity INTEGER CHECK (capacity IS NULL OR capacity > 0),
+  is_public BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+
 ALTER TABLE bible_study_groups
   ADD COLUMN IF NOT EXISTS group_email VARCHAR(320),
   ADD COLUMN IF NOT EXISTS location_text VARCHAR(500),
@@ -126,4 +140,3 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_bible_study_groups_telegram_status
   ON bible_study_groups(telegram_connection_status)
   WHERE telegram_connection_status <> 'UNVERIFIED';
-

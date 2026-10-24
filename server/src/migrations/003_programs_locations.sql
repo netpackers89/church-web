@@ -44,6 +44,24 @@ CREATE TABLE IF NOT EXISTS program_schedules (
 );
 
 -- ----------------------------------------------------------------------------
+-- bible_study_groups — base table required by registration and membership
+-- migrations that follow.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bible_study_groups (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(160) NOT NULL,
+    description TEXT,
+    leader_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    location_id BIGINT REFERENCES program_locations(id) ON DELETE SET NULL,
+    meeting_schedule TEXT,
+    capacity INTEGER CHECK (capacity IS NULL OR capacity > 0),
+    is_public BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+
+-- ----------------------------------------------------------------------------
 -- Triggers (do not duplicate)
 -- ----------------------------------------------------------------------------
 DROP TRIGGER IF EXISTS trg_programs_updated ON programs;

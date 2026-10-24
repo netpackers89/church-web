@@ -8,6 +8,8 @@ dotenv.config({ path: resolve(currentDirectory, '../../.env') });
 const port = Number(process.env.PORT ?? process.env.port ?? 5000);
 const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173';
 const bundledChurchLogoUrl = new URL('/mulu%20wengel%20logo.png', webOrigin).href;
+const pgSslValue = process.env.PGSSL?.toLowerCase();
+const pgSslRejectUnauthorizedValue = process.env.PGSSL_REJECT_UNAUTHORIZED?.toLowerCase();
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
 	throw new Error('PORT must be a valid TCP port number.');
@@ -33,6 +35,7 @@ export const config = {
 		token: process.env.TELEGRAM_BOT_TOKEN,
 		chatId: process.env.TELEGRAM_CHAT_ID,
 		username: process.env.TELEGRAM_BOT_USERNAME?.replace(/^@/, ''),
+		sendStartupConfirmation: String(process.env.TELEGRAM_SEND_STARTUP_CONFIRMATION ?? 'false').toLowerCase() === 'true',
 	},
 	imgbbApiKey: process.env.IMGBB_API_KEY,
 	branding: {
@@ -46,6 +49,7 @@ export const config = {
 		programsUrl: process.env.CHURCH_PROGRAMS_URL,
 		givingUrl: process.env.CHURCH_GIVING_URL,
 		email: process.env.CHURCH_CONTACT_EMAIL,
+		phone: process.env.CHURCH_CONTACT_PHONE,
 		facebookUrl: process.env.CHURCH_FACEBOOK_URL,
 		instagramUrl: process.env.CHURCH_INSTAGRAM_URL,
 		youtubeUrl: process.env.CHURCH_YOUTUBE_URL,
@@ -55,13 +59,18 @@ export const config = {
 		bibleReference: process.env.WELCOME_BIBLE_REFERENCE ?? 'Romans 15:13 (KJV)',
 	},
 	database: {
+		production: process.env.NODE_ENV === 'production',
 		url: process.env.DATABASE_URL,
 		host: process.env.PGHOST ?? '127.0.0.1',
 		port: Number(process.env.PGPORT ?? 5432),
 		name: process.env.PGDATABASE ?? 'church_notifications',
 		user: process.env.PGUSER ?? 'postgres',
 		password: process.env.PGPASSWORD,
-		ssl: String(process.env.PGSSL ?? 'false').toLowerCase() === 'true',
+		ssl: pgSslValue == null ? null : pgSslValue === 'true',
+		sslRejectUnauthorized: pgSslRejectUnauthorizedValue == null
+			? process.env.NODE_ENV === 'production'
+			: pgSslRejectUnauthorizedValue !== 'false',
+		sslRootCert: process.env.PGSSLROOTCERT,
 	},
 	adminApiKey: process.env.ADMIN_API_KEY,
 	mediaAllowedHosts: (process.env.MEDIA_ALLOWED_HOSTS ?? 'i.ibb.co')

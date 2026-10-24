@@ -1,8 +1,7 @@
 import { pool } from '../config/db.js';
 import { config } from '../config/env.js';
-import { sendEmailNotification } from './emailService.js';
-import { sendTelegramNotification } from './telegramService.js';
-import { createWelcomeEmail } from './welcomeEmailTemplate.js';
+import { createWelcomeEmail, sendEmailNotification } from '../email/index.js';
+import { sendTelegramNotification } from '../telegram/services/messaging.js';
 import { renderEmailHtml, renderTemplateVariables } from './notificationStudioService.js';
 
 export async function createMemberWelcomeNotification(user) {

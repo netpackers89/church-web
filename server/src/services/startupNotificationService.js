@@ -1,5 +1,5 @@
-import { sendStartupConfirmation as sendEmailConfirmation } from './emailService.js';
-import { sendStartupConfirmation as sendTelegramConfirmation } from './telegramService.js';
+import { sendStartupConfirmation as sendEmailConfirmation } from '../email/index.js';
+import { sendStartupConfirmation as sendTelegramConfirmation } from '../telegram/services/messaging.js';
 import { updateProviderStatus } from './notificationStatus.js';
 
 async function checkProvider(name, sendConfirmation) {
@@ -16,9 +16,8 @@ async function checkProvider(name, sendConfirmation) {
   }
 }
 
-export function sendStartupConfirmations() {
-  return Promise.all([
-    checkProvider('email', sendEmailConfirmation),
-    checkProvider('telegram', sendTelegramConfirmation),
-  ]);
+export function sendStartupConfirmations({ telegram = false } = {}) {
+  const checks = [checkProvider('email', sendEmailConfirmation)];
+  if (telegram) checks.push(checkProvider('telegram', sendTelegramConfirmation));
+  return Promise.all(checks);
 }

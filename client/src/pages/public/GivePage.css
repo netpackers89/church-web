@@ -1,0 +1,823 @@
+.giving-page {
+  min-height: 100vh;
+  background: #fff;
+  color: #172b3e;
+}
+
+.giving-page .container {
+  width: min(100% - 2rem, 1120px);
+  margin-inline: auto;
+}
+
+.giving-page-intro {
+  padding: 8rem 0 3rem;
+  border-bottom: 1px solid #e7edf2;
+  background: #fff;
+}
+
+.giving-page-intro h1 {
+  margin: 0.65rem 0 0.7rem;
+  color: #0f3254;
+  font-size: clamp(2.2rem, 5vw, 3.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.giving-page-intro p {
+  max-width: 48rem;
+  margin: 0;
+  color: #586b7b;
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.giving-eyebrow,
+.giving-section-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #45637d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.giving-eyebrow > span {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #0f3254;
+}
+
+.giving-section-kicker {
+  color: #617586;
+  letter-spacing: 0.045em;
+}
+
+.giving-section-kicker svg {
+  color: #0f3254;
+}
+
+.giving-public-section,
+.giving-campaign-section,
+.giving-category-section,
+.giving-member-section {
+  padding: 3.5rem 0;
+}
+
+.giving-campaign-section,
+.giving-member-section {
+  background: #f7f9fb;
+  border-block: 1px solid #e9eef2;
+}
+
+.giving-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.45rem;
+}
+
+.giving-section-heading h2 {
+  margin: 0.45rem 0 0;
+  color: #0f3254;
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  letter-spacing: -0.025em;
+}
+
+.giving-method-count {
+  color: #697a89;
+  font-size: 0.88rem;
+}
+
+.giving-account-grid,
+.giving-campaign-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 1rem;
+}
+
+.giving-account-card,
+.giving-campaign-card,
+.giving-record-card,
+.giving-contribution-form,
+.giving-records-panel,
+.giving-sign-in-prompt,
+.giving-submitted-card {
+  border: 1px solid #e1e8ee;
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 8px 26px rgb(15 50 84 / 4%);
+}
+
+.giving-account-card {
+  display: flex;
+  flex-direction: column;
+  padding: 1.25rem;
+}
+
+.giving-account-provider {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid #edf1f4;
+}
+
+.giving-account-icon,
+.giving-sign-in-icon,
+.giving-receipt-mark {
+  display: grid;
+  flex: none;
+  width: 2.65rem;
+  height: 2.65rem;
+  place-items: center;
+  border-radius: 0.8rem;
+  background: #edf3f8;
+  color: #0f3254;
+}
+
+.giving-account-provider h3 {
+  margin: 0;
+  color: #0f3254;
+  font-size: 1.05rem;
+}
+
+.giving-account-provider span:not(.giving-account-icon) {
+  display: block;
+  margin-top: 0.2rem;
+  color: #71808d;
+  font-size: 0.82rem;
+}
+
+.giving-account-detail {
+  margin-top: 1rem;
+}
+
+.giving-account-detail > span,
+.giving-record-facts span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #71808d;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.giving-account-detail > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.giving-account-detail strong {
+  color: #22384b;
+  overflow-wrap: anywhere;
+}
+
+.giving-account-number {
+  font-size: 1.05rem;
+  letter-spacing: 0.03em;
+}
+
+.giving-copy-button {
+  display: grid;
+  flex: none;
+  width: 2.2rem;
+  height: 2.2rem;
+  place-items: center;
+  border: 1px solid #e2e9ee;
+  border-radius: 0.65rem;
+  background: #fff;
+  color: #0f3254;
+  cursor: pointer;
+}
+
+.giving-copy-button:hover {
+  background: #f2f6f9;
+}
+
+.giving-account-branch,
+.giving-account-instructions {
+  margin: 0.75rem 0 0;
+  color: #617282;
+  font-size: 0.87rem;
+  line-height: 1.55;
+}
+
+.giving-account-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 1.2rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #cbd9e4;
+  border-radius: 0.7rem;
+  background: #fff;
+  color: #0f3254;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.giving-account-select:hover,
+.giving-account-select.is-selected {
+  border-color: #0f3254;
+  background: #f0f5f8;
+}
+
+.giving-safety-note {
+  margin: 1rem 0 0;
+  color: #748391;
+  font-size: 0.83rem;
+  line-height: 1.55;
+}
+
+.giving-campaign-card {
+  overflow: hidden;
+}
+
+.giving-campaign-card > img {
+  display: block;
+  width: 100%;
+  max-height: 13rem;
+  object-fit: cover;
+}
+
+.giving-campaign-body {
+  padding: 1.2rem;
+}
+
+.giving-campaign-body > span {
+  color: #647a8c;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.giving-campaign-body h3 {
+  margin: 0.45rem 0;
+  color: #0f3254;
+  font-size: 1.2rem;
+}
+
+.giving-campaign-body > p {
+  color: #607282;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.giving-campaign-accounts {
+  display: grid;
+  gap: 0.7rem;
+  margin: 1rem 0;
+}
+
+.giving-campaign-accounts h4 {
+  margin: 0;
+  color: #0f3254;
+  font-size: 0.9rem;
+}
+
+.giving-campaign-accounts .giving-account-card {
+  padding: 0.85rem;
+  box-shadow: none;
+}
+
+.giving-campaign-progress {
+  margin: 1rem 0;
+}
+
+.giving-campaign-progress > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.84rem;
+}
+
+.giving-campaign-progress > div span,
+.giving-campaign-progress small {
+  color: #6e7f8d;
+}
+
+.giving-campaign-progress progress {
+  width: 100%;
+  height: 0.55rem;
+  margin: 0.5rem 0 0.25rem;
+  accent-color: #0f3254;
+}
+
+.giving-category-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.giving-category-list span {
+  padding: 0.58rem 0.8rem;
+  border: 1px solid #e2e9ee;
+  border-radius: 999px;
+  background: #fff;
+  color: #344c61;
+  font-size: 0.86rem;
+}
+
+.giving-member-container {
+  max-width: 920px !important;
+}
+
+.giving-sign-in-prompt,
+.giving-submitted-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.giving-sign-in-prompt > div:nth-child(2),
+.giving-submitted-card > div:first-of-type {
+  flex: 1;
+}
+
+.giving-sign-in-prompt h3,
+.giving-submitted-card h3 {
+  margin: 0;
+  color: #0f3254;
+  font-size: 1.05rem;
+}
+
+.giving-sign-in-prompt p,
+.giving-submitted-card p {
+  margin: 0.35rem 0 0;
+  color: #617282;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.giving-sign-in-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.giving-sign-in-register {
+  margin: 0;
+  color: #617282;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.giving-sign-in-register a {
+  color: #0f3254;
+  font-weight: 700;
+}
+
+.giving-tabs {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+  padding: 0.35rem;
+  border: 1px solid #e3e9ee;
+  border-radius: 0.85rem;
+  background: #f1f4f6;
+}
+
+.giving-tabs button,
+.giving-form-purpose-toggle button,
+.giving-payer-choice button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.65rem;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: #5c6e7d;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.giving-tabs button.is-active,
+.giving-form-purpose-toggle button.is-active,
+.giving-payer-choice button.is-active {
+  border-color: #e2e8ed;
+  background: #fff;
+  color: #0f3254;
+  box-shadow: 0 2px 7px rgb(15 50 84 / 6%);
+}
+
+.giving-contribution-form,
+.giving-records-panel {
+  display: grid;
+  gap: 1.2rem;
+  padding: clamp(1rem, 3vw, 1.6rem);
+}
+
+.giving-form-purpose-toggle,
+.giving-payer-choice > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.giving-form-purpose-toggle {
+  padding: 0.3rem;
+  border-radius: 0.8rem;
+  background: #f2f5f7;
+}
+
+.giving-form-purpose-toggle button {
+  flex: 1;
+}
+
+.giving-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.giving-payer-choice {
+  display: grid;
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px solid #e5ebef;
+  border-radius: 0.8rem;
+  background: #fbfcfd;
+}
+
+.giving-field-heading {
+  color: #273e52;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.giving-payer-choice > p {
+  margin: 0;
+  color: #6b7d8c;
+  font-size: 0.86rem;
+}
+
+.giving-confirm-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  color: #4f6374;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.giving-confirm-check input {
+  flex: none;
+  margin-top: 0.15rem;
+  accent-color: #0f3254;
+}
+
+.giving-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #edf1f4;
+}
+
+.giving-form-footer p {
+  margin: 0;
+  color: #71808d;
+  font-size: 0.83rem;
+}
+
+.giving-records-panel {
+  min-height: 15rem;
+}
+
+.giving-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.giving-panel-title h3 {
+  margin: 0;
+  color: #0f3254;
+}
+
+.giving-panel-title p {
+  margin: 0.3rem 0 0;
+  color: #72818d;
+  font-size: 0.87rem;
+}
+
+.giving-record-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.giving-record-card {
+  padding: 1rem;
+  box-shadow: none;
+}
+
+.giving-record-topline,
+.giving-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.giving-record-topline h3 {
+  margin: 0;
+  color: #20384c;
+  font-size: 1rem;
+}
+
+.giving-record-topline p {
+  margin: 0.25rem 0 0;
+  color: #758391;
+  font-size: 0.82rem;
+}
+
+.giving-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.58rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.giving-status.is-pending {
+  background: #fff7e8;
+  color: #93620e;
+}
+
+.giving-status.is-approved {
+  background: #eaf6ef;
+  color: #246b45;
+}
+
+.giving-status.is-rejected {
+  background: #fff0ef;
+  color: #a23831;
+}
+
+.giving-record-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+  padding: 0.8rem 0;
+  border-block: 1px solid #edf1f4;
+}
+
+.giving-record-facts strong {
+  color: #344c60;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.giving-record-recipient,
+.giving-record-review-note {
+  color: #5c7080;
+  font-size: 0.86rem;
+}
+
+.giving-record-actions {
+  justify-content: flex-start;
+}
+
+.giving-record-receipt-number {
+  color: #6a7c8b;
+  font-size: 0.82rem;
+}
+
+.giving-submitted-card > svg {
+  flex: none;
+  color: #268056;
+}
+
+.giving-submitted-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.giving-receipt-print {
+  padding: 1rem;
+  color: #1e3448;
+}
+
+.giving-receipt-header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding-bottom: 1.2rem;
+  border-bottom: 2px solid #0f3254;
+}
+
+.giving-receipt-header p {
+  margin: 0 0 0.3rem;
+  color: #687b8b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.giving-receipt-header h2 {
+  margin: 0;
+  color: #0f3254;
+  font-size: 1.2rem;
+}
+
+.giving-receipt-header span:not(.giving-receipt-mark) {
+  display: block;
+  margin-top: 0.2rem;
+  color: #647788;
+  font-size: 0.83rem;
+}
+
+.giving-receipt-number-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  color: #617586;
+  font-size: 0.85rem;
+}
+
+.giving-receipt-number-row strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #253d52;
+}
+
+.giving-receipt-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin: 0;
+  padding: 1rem 0;
+  border-block: 1px solid #e8edf1;
+}
+
+.giving-receipt-details dt {
+  color: #758391;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.giving-receipt-details dd {
+  margin: 0.25rem 0 0;
+  color: #273e52;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.giving-receipt-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.2rem 0;
+}
+
+.giving-receipt-total span {
+  color: #4e6374;
+}
+
+.giving-receipt-total strong {
+  color: #0f3254;
+  font-size: 1.25rem;
+}
+
+.giving-receipt-thanks {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid #e8edf1;
+  color: #667989;
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.giving-account-skeleton,
+.giving-campaign-skeleton,
+.giving-record-skeleton,
+.giving-member-skeleton,
+.giving-receipt-loading {
+  min-height: 11rem;
+  border: 1px solid #edf1f4;
+  border-radius: 1rem;
+  background: linear-gradient(90deg, #f2f5f7, #fafbfc, #f2f5f7);
+  background-size: 200% 100%;
+  animation: giving-shimmer 1.4s ease-in-out infinite;
+}
+
+.giving-record-skeleton {
+  min-height: 12rem;
+}
+
+.giving-receipt-loading {
+  min-height: 22rem;
+}
+
+@keyframes giving-shimmer {
+  to { background-position: -200% 0; }
+}
+
+@media (max-width: 700px) {
+  .giving-page-intro {
+    padding-top: 6.75rem;
+  }
+
+  .giving-public-section,
+  .giving-campaign-section,
+  .giving-category-section,
+  .giving-member-section {
+    padding-block: 2.5rem;
+  }
+
+  .giving-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .giving-sign-in-prompt,
+  .giving-submitted-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .giving-sign-in-prompt > .btn {
+    width: 100%;
+  }
+
+  .giving-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .giving-form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .giving-form-footer > .btn {
+    width: 100%;
+  }
+
+  .giving-record-facts {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .giving-record-facts > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .giving-tabs button {
+    flex: 1;
+    min-width: max-content;
+    padding-inline: 0.7rem;
+  }
+
+  .giving-submitted-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .giving-submitted-actions > .btn {
+    width: 100%;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .giving-receipt-print,
+  .giving-receipt-print * {
+    visibility: visible !important;
+  }
+
+  .giving-receipt-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    padding: 1.5rem;
+    color: #111;
+    background: #fff;
+  }
+}

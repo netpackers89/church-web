@@ -21,17 +21,30 @@ export default function AccountSettingsPage() {
 
   const [prefs, setPrefs] = useState({ notifyEmail: null });
   const [prefsBusy, setPrefsBusy] = useState(false);
+  const [prefsStatus, setPrefsStatus] = useState('loading');
+  const [prefsError, setPrefsError] = useState('');
+  const [prefsRetry, setPrefsRetry] = useState(0);
 
   useEffect(() => {
     let active = true;
     userService.profile().then((response) => {
       const profile = response.data?.data ?? response.data?.user ?? {};
-      if (active) setPrefs({ notifyEmail: Boolean(profile.notifyEmail) });
-    }).catch(() => {
-      if (active) setPrefs({ notifyEmail: false });
+      if (typeof profile.notifyEmail !== 'boolean') {
+        throw new Error('The notification preference was missing from the profile response.');
+      }
+      if (active) {
+        setPrefs({ notifyEmail: profile.notifyEmail });
+        setPrefsStatus('ready');
+        setPrefsError('');
+      }
+    }).catch((error) => {
+      if (active) {
+        setPrefsStatus('error');
+        setPrefsError(error.message || 'Notification preferences could not be loaded.');
+      }
     });
     return () => { active = false; };
-  }, []);
+  }, [prefsRetry]);
 
   async function handlePassword(e) {
     e.preventDefault();
@@ -82,7 +95,7 @@ export default function AccountSettingsPage() {
     }
   }
 
-  const anyPref = prefs.notifyEmail !== null;
+  const anyPref = prefsStatus === 'ready' && prefs.notifyEmail !== null;
 
   return (
     <div className="stack-lg">
@@ -129,12 +142,19 @@ export default function AccountSettingsPage() {
           <span className="stat-icon" style={{ display: 'grid', placeItems: 'center', width: '2.4rem', height: '2.4rem', borderRadius: 'var(--r-md)', background: 'var(--blue-soft)', color: 'var(--blue)' }}><Bell size={17} /></span>
           <h2 className="serif" style={{ fontSize: '1.3rem' }}>Notification preferences</h2>
         </div>
+        {prefsStatus === 'loading' ? <p className="muted" role="status">Loading your notification preferences…</p> : null}
+        {prefsStatus === 'error' ? (
+          <div className="stack-sm" style={{ marginBottom: '1rem' }}>
+            <Alert variant="danger">Notification preferences could not be loaded: {prefsError}</Alert>
+            <Button type="button" variant="secondary" onClick={() => { setPrefsStatus('loading'); setPrefsRetry((retry) => retry + 1); }}>Try again</Button>
+          </div>
+        ) : null}
         <form className="form-grid" onSubmit={handlePrefs} noValidate>
           <div className="checkbox-row">
-            <input id="notify-email-pref" type="checkbox" checked={prefs.notifyEmail ?? false} onChange={(e) => setPrefs((p) => ({ ...p, notifyEmail: e.target.checked }))} />
+            <input id="notify-email-pref" type="checkbox" checked={prefs.notifyEmail ?? false} disabled={!anyPref} onChange={(e) => setPrefs((p) => ({ ...p, notifyEmail: e.target.checked }))} />
             <label htmlFor="notify-email-pref">Email me about events, announcements, and prayer points.</label>
           </div>
-          <div><Button type="submit" loading={prefsBusy} disabled={!anyPref}>Save preferences</Button></div>
+          <div><Button type="submit" loading={prefsBusy} disabled={!anyPref || prefsStatus !== 'ready'}>Save preferences</Button></div>
         </form>
       </section>
     </div>

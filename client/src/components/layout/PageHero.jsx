@@ -1,4 +1,5 @@
 import { churchName } from '../../utils/siteConfig.js';
+import ReliableImage from '../ui/ReliableImage.jsx';
 
 const PAGE_IMAGES = [
   { match: 'about', image: 'https://images.unsplash.com/photo-1507692049790-de58290a4334?auto=format&fit=crop&w=1920&q=85' },
@@ -23,12 +24,9 @@ export default function PageHero({ eyebrow, title, subtitle, imageUrl }) {
   return (
     <section className="hero page-hero" style={{ minHeight: 'auto' }}>
       <div className="hero-media">
-        <img
+        <ReliableImage
           src={imageUrl || pageImage || 'https://images.unsplash.com/photo-1519491050282-cf00c82424b4?auto=format&fit=crop&w=1920&q=85'}
           alt=""
-          onError={(e) => {
-            e.currentTarget.style.display = 'none';
-          }}
         />
       </div>
       <div className="container-wide" style={{ position: 'relative', zIndex: 1 }}>

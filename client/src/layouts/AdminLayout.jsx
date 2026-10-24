@@ -6,10 +6,20 @@ import { usePermissions } from '../hooks/usePermission.js';
 export default function AdminLayout() {
   const perms = usePermissions();
   const quickActions = [
-    ...(perms.has('events.manage') ? [{ label: 'Create event', to: '/admin/events' }] : []),
-    ...(perms.has('announcements.manage') ? [{ label: 'Create announcement', to: '/admin/announcements' }] : []),
-    ...(perms.has('staff.manage') || perms.has('programs.manage') || (perms.has('users.create') && perms.has('roles.manage')) ? [{ label: 'Registration Center', to: '/admin/registrations' }] : []),
+    ...(perms.has('membership.manage') ? [{ label: 'Register New Christian', to: '/new-christian' }] : []),
+    ...(perms.has('users.create') && perms.has('roles.manage') ? [{ label: 'Register Staff', to: '/admin/registrations?type=staff' }] : []),
+    ...(perms.has('staff.manage') ? [{ label: 'Register Department', to: '/admin/registrations?type=department' }] : []),
+    ...(perms.has('programs.manage') ? [{ label: 'Register Bible Study Group', to: '/admin/registrations?type=bible-study-group' }] : []),
   ];
-  return <DashboardLayout nav={adminNav(perms)} title="Administration" homePath="/admin" quickActions={quickActions} />;
+  return (
+    <DashboardLayout
+      nav={adminNav(perms)}
+      title="Administration"
+      homePath="/admin"
+      quickActions={quickActions}
+      quickActionsLabel="Register"
+      expandAllNav
+      admin
+    />
+  );
 }
-

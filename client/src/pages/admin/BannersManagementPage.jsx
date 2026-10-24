@@ -9,6 +9,7 @@ import Input from '../../components/ui/Input.jsx';
 import Modal from '../../components/ui/Modal.jsx';
 import Alert from '../../components/ui/Alert.jsx';
 import MediaUploadField from '../../components/ui/MediaUploadField.jsx';
+import ReliableImage from '../../components/ui/ReliableImage.jsx';
 
 const blank = { title: '', description: '', imageUrl: '', status: 'DRAFT', type: 'BANNER' };
 
@@ -121,7 +122,7 @@ export default function BannersManagementPage() {
           <div className="grid-auto">
             {list.map((b) => (
               <div key={b.id ?? b.title} className="card card-hover">
-                {b.mediaUrl || b.imageUrl ? <img src={b.mediaUrl || b.imageUrl} alt={b.title ?? 'Banner'} style={{ width: '100%', height: '8rem', objectFit: 'cover' }} /> : null}
+                {b.mediaUrl || b.imageUrl ? <ReliableImage src={b.mediaUrl || b.imageUrl} alt={b.title ?? 'Banner'} style={{ width: '100%', height: '8rem', objectFit: 'cover' }} /> : null}
                 <div className="card-body">
                   <h3>{b.title ?? 'Untitled banner'}</h3>
                   {b.description ? <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.2rem' }}>{b.description}</p> : null}

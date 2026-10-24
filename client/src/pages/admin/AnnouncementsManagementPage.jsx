@@ -1,6 +1,7 @@
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
-import { adminService as messaging, contentService } from '../../services/index.js';
+import { adminService as messaging } from '../../services/index.js';
+import { adminService as announcementsService } from '../../services/api.js';
 import useAsync from '../../hooks/useAsync.js';
 import DataState from '../../components/ui/DataState.jsx';
 import EmptyState from '../../components/ui/EmptyState.jsx';
@@ -23,7 +24,7 @@ export default function AnnouncementsManagementPage() {
   const [templateId, setTemplateId] = useState('');
 
   const announcements = useAsync(async () => {
-    const res = await contentService.listAnnouncements();
+    const res = await announcementsService.announcements();
     return res?.data?.data ?? res?.data ?? [];
   }, []);
   const templates = useAsync(async () => (await messaging.emailTemplates())?.data?.data ?? [], []);
@@ -46,8 +47,8 @@ export default function AnnouncementsManagementPage() {
         status: action,
         imageUrl: payload?.mediaUrl || form.imageUrl,
       };
-      if (editing) await contentService.updateAnnouncement(editing.id, data);
-      else await contentService.createAnnouncement(data);
+      if (editing) await announcementsService.updateAnnouncement(editing.id, data);
+      else await announcementsService.createAnnouncement(data);
       success(editing ? 'Announcement updated' : 'Announcement saved');
       setModalOpen(false);
       setEditing(null);

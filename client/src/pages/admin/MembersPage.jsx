@@ -1,4 +1,4 @@
-import { Users, Search, UserCog, UserPlus } from 'lucide-react';
+import { Users, Search, UserCog } from 'lucide-react';
 import { useState } from 'react';
 import { adminService as adminApi, userService, unwrap } from '../../services/api.js';
 import { adminService as directoryAdmin } from '../../services/index.js';
@@ -11,23 +11,30 @@ import Alert from '../../components/ui/Alert.jsx';
 import Modal from '../../components/ui/Modal.jsx';
 import { useToast } from '../../components/feedback/ToastProvider.jsx';
 import { usePermissions } from '../../hooks/usePermission.js';
+import { useAuth } from '../../context/AuthContext.jsx';
+import ProfileAvatar from '../../components/ui/ProfileAvatar.jsx';
 
 const ROLE_TONE = { ADMIN: 'danger', PASTOR: 'warning', FINANCE: 'warning', LEADER: 'neutral', REGISTRAR: 'neutral', MEMBER: 'neutral' };
 const STAFF_ROLES = ['ADMIN', 'SYSTEM_OWNER', 'PASTOR', 'LEADER', 'FINANCE', 'REGISTRAR', 'STAFF'];
 
 export default function MembersPage() {
   const perms = usePermissions();
+  const { user } = useAuth();
   const { success } = useToast();
   const [search, setSearch] = useState('');
   const [directoryTab, setDirectoryTab] = useState('all');
   const [busy, setBusy] = useState({});
   const [retryError, setRetryError] = useState('');
   const [roleModal, setRoleModal] = useState(null); // { member, selected: [] }
+  const [statusTarget, setStatusTarget] = useState(null);
   const [savingRoles, setSavingRoles] = useState(false);
   const members = useAsync(async () => unwrap(await userService.directory()) ?? [], []);
   const roles = useAsync(async () => perms.has('roles.manage') ? unwrap(await directoryAdmin.roles()) ?? [] : [], [perms.has('roles.manage')]);
   const canRetryWelcome = perms.has('users.manage');
+  const canManageUsers = perms.has('users.manage');
   const canManageRoles = perms.has('roles.manage');
+  const isSystemOwner = user?.role === 'SYSTEM_OWNER';
+  const canGrantAdmin = canManageRoles && (isSystemOwner || user?.role === 'ADMIN');
 
   async function retryWelcome(member, channel) {
     const key = `${member.id}-${channel}`;
@@ -71,6 +78,24 @@ export default function MembersPage() {
     }
   }
 
+  async function saveStatus() {
+    if (!statusTarget) return;
+    const member = statusTarget;
+    const status = (member.accountStatus ?? 'ACTIVE') === 'ACTIVE' ? 'DEACTIVATED' : 'ACTIVE';
+    setBusy((state) => ({ ...state, [`${member.id}-status`]: true }));
+    setRetryError('');
+    try {
+      await directoryAdmin.updateUserStatus(member.id, { status });
+      success(status === 'ACTIVE' ? 'Account reactivated' : 'Account deactivated');
+      setStatusTarget(null);
+      await members.reload();
+    } catch (error) {
+      setRetryError(error.message || 'Could not update the account status.');
+    } finally {
+      setBusy((state) => ({ ...state, [`${member.id}-status`]: false }));
+    }
+  }
+
   return (
     <div className="stack-lg">
       <div className="page-head">
@@ -88,7 +113,6 @@ export default function MembersPage() {
             onChange={(e) => setSearch(e.target.value)}
             aria-label="Search members"
           />
-          <Button to="/admin/registrations" size="sm" iconLeft={<UserPlus size={14} />} style={{ marginLeft: '0.5rem' }}>Register person</Button>
         </div>
       </div>
 
@@ -125,11 +149,9 @@ export default function MembersPage() {
                     <tr key={m.id ?? m.email}>
                       <td>
                         <div className="row" style={{ gap: '0.6rem', alignItems: 'center' }}>
-                          {m.profileImageUrl ? (
-                            <img src={m.profileImageUrl} alt="" style={{ width: '2.2rem', height: '2.2rem', borderRadius: '50%', objectFit: 'cover', flex: 'none' }} />
-                          ) : (
-                            <span className="brand-mark" style={{ width: '2.2rem', height: '2.2rem', fontSize: '0.8rem', flex: 'none' }}>{(m.name || 'U').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase()}</span>
-                          )}
+                          <ProfileAvatar src={m.profileImageUrl} name={m.name} alt={`${m.name || 'Member'} profile picture`}
+                            imageClassName="brand-mark" fallbackClassName="brand-mark"
+                            style={{ width: '2.2rem', height: '2.2rem', fontSize: '0.8rem', flex: 'none', objectFit: 'cover' }} />
                           <strong>{m.name}</strong>
                         </div>
                       </td>
@@ -144,7 +166,20 @@ export default function MembersPage() {
                         {canRetryWelcome && m.welcomeTelegramStatus === 'FAILED' ? <Button size="sm" variant="ghost" loading={Boolean(busy[`${m.id}-telegram`])} onClick={() => retryWelcome(m, 'telegram')}>Retry Telegram</Button> : null}
                       </td>
                       <td>
-                        {canManageRoles ? <Button size="sm" variant="secondary" iconLeft={<UserCog size={14} />} onClick={() => openRoleModal(m)}>Roles</Button> : null}
+                        <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
+                          {canManageRoles && (isSystemOwner || m.role !== 'ADMIN') ? <Button size="sm" variant="secondary" iconLeft={<UserCog size={14} />} onClick={() => openRoleModal(m)}>Roles</Button> : null}
+                          {canManageUsers ? (
+                            <Button
+                              size="sm"
+                              variant={(m.accountStatus ?? 'ACTIVE') === 'ACTIVE' ? 'ghost' : 'secondary'}
+                              disabled={String(m.id) === String(user?.id) || Boolean(busy[`${m.id}-status`])}
+                              loading={Boolean(busy[`${m.id}-status`])}
+                              onClick={() => setStatusTarget(m)}
+                            >
+                              {(m.accountStatus ?? 'ACTIVE') === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
+                            </Button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -161,7 +196,7 @@ export default function MembersPage() {
       <Modal open={Boolean(roleModal)} onClose={() => !savingRoles && setRoleModal(null)} title={`Manage roles — ${roleModal?.member?.name ?? ''}`}>
         <div className="stack">
           <p className="muted">Assign one or more roles. Changes are enforced immediately and re-validated on the server.</p>
-          {roles.data?.filter((r) => !['SYSTEM_OWNER', 'ADMIN'].includes(r.code)).map((role) => (
+          {roles.data?.filter((r) => r.code !== 'SYSTEM_OWNER' && (r.code !== 'ADMIN' || canGrantAdmin)).map((role) => (
             <label key={role.id ?? role.code} className="check-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <input type="checkbox" checked={roleModal?.selected.includes(role.code)} onChange={() => toggleRole(role.code)} />
               <strong>{role.name || role.code}</strong>
@@ -173,6 +208,31 @@ export default function MembersPage() {
             <Button type="button" loading={savingRoles} onClick={saveRoles} disabled={!roleModal?.selected.length}>Save roles</Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(statusTarget)}
+        onClose={() => !busy[`${statusTarget?.id}-status`] && setStatusTarget(null)}
+        title={(statusTarget?.accountStatus ?? 'ACTIVE') === 'ACTIVE' ? 'Deactivate account?' : 'Reactivate account?'}
+        footer={
+          <>
+            <Button type="button" variant="secondary" onClick={() => setStatusTarget(null)} disabled={Boolean(busy[`${statusTarget?.id}-status`])}>Cancel</Button>
+            <Button
+              type="button"
+              variant={(statusTarget?.accountStatus ?? 'ACTIVE') === 'ACTIVE' ? 'danger' : 'primary'}
+              loading={Boolean(busy[`${statusTarget?.id}-status`])}
+              onClick={saveStatus}
+            >
+              {(statusTarget?.accountStatus ?? 'ACTIVE') === 'ACTIVE' ? 'Deactivate account' : 'Reactivate account'}
+            </Button>
+          </>
+        }
+      >
+        <p className="muted">
+          {(statusTarget?.accountStatus ?? 'ACTIVE') === 'ACTIVE'
+            ? `Deactivating ${statusTarget?.name || 'this account'} will block sign-in and end active sessions.`
+            : `Reactivating ${statusTarget?.name || 'this account'} will restore their ability to sign in.`}
+        </p>
       </Modal>
     </div>
   );

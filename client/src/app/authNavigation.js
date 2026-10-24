@@ -16,8 +16,10 @@ const ADMIN_PATH_PERMISSIONS = [
   [/^\/admin\/departments\/register$/, ['staff.manage']],
   [/^\/admin\/bible-study-groups\/register$/, ['programs.manage']],
   [/^\/admin\/(departments|organizations)(\/|$)/, ['staff.manage', 'departments.view']],
+  [/^\/admin\/programs(\/|$)/, ['programs.manage', 'events.manage', 'announcements.manage']],
   [/^\/admin\/(events|bible-study)(\/|$)/, ['events.manage', 'programs.manage']],
   [/^\/admin\/(verse)(\/|$)/, ['bible.publish']],
+  [/^\/admin\/finance(\/|$)/, ['finance.manage', 'reports.read', 'settings.manage']],
   [/^\/admin\/(giving)(\/|$)/, ['finance.manage']],
   [/^\/admin\/(reports)(\/|$)/, ['reports.read']],
   [/^\/admin\/(audit)(\/|$)/, ['audit.read']],
@@ -26,7 +28,7 @@ const ADMIN_PATH_PERMISSIONS = [
   [/^\/admin\/communications-test(\/|$)/, ['notifications.test', 'system.owner.manage']],
   [/^\/admin\/(banners|flyers)(\/|$)/, ['announcements.manage', 'media.manage']],
   [/^\/admin\/(new-christians)(\/|$)/, ['membership.manage']],
-  [/^\/admin\/(telegram-inbox)(\/|$)/, ['telegram.manage']],
+  [/^\/admin\/(telegram(?:\/.*)?|telegram-inbox)(\/|$)/, ['telegram.manage']],
   [/^\/admin\/registrations(\/|$)/, ['users.create', 'staff.manage', 'programs.manage']],
 ];
 
@@ -102,7 +104,14 @@ function safeInternalPath(path) {
 function canAccessRequestedPath(user, requestedPath) {
   const path = safeInternalPath(requestedPath);
   if (!path || /^\/(login|register|forgot-password)(\/|$)/.test(path)) return null;
-  if (path === '/me' || path.startsWith('/me/')) return path;
+  const { pathname, search, hash } = new URL(path, 'https://church.invalid');
+  if (pathname === '/me' || pathname === '/me/bible-study') return '/community';
+  if (pathname === '/me/organizations') return '/ministries';
+  if (pathname === '/me/giving') return '/give?tab=history';
+  if (/^\/me\/giving\/[^/]+\/receipt\/?$/.test(pathname)) return '/give?tab=receipts';
+  if (pathname === '/bible-study') return `/community${search}${hash}`;
+  if (pathname === '/community') return path;
+  if (pathname.startsWith('/me/')) return path;
   if (path === '/admin' || path.startsWith('/admin/')) return canAccessAdminPath(user, path) ? path : null;
 
   const departmentMatch = path.match(/^\/departments\/([^/]+)\/workspace\/?$/);
@@ -129,5 +138,5 @@ export function getPostLoginPath(user, requestedPath = null) {
   const workspace = scopedWorkspace(user);
   if (workspace) return workspace;
   if (canAccessAdminArea(user)) return '/admin';
-  return '/me';
+  return '/community';
 }

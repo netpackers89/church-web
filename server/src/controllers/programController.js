@@ -4,7 +4,12 @@ import { requestError, requiredString } from '../utils/http.js';
 import { queueEventNotifications } from '../services/eventNotificationService.js';
 
 export async function listDepartments(_request, response) {
-  try { const result=await pool.query(`SELECT d.id,d.name,d.description,d.is_active AS "isActive",o.name AS "organizationName",COALESCE(u.name,d.leader_name) AS "leaderName" FROM departments d LEFT JOIN organizations o ON o.id=d.organization_id LEFT JOIN users u ON u.id=d.leader_user_id WHERE d.deleted_at IS NULL ORDER BY d.name`); return response.json({success:true,data:result.rows}); }catch(error){return requestError(error,response);}
+  try {
+    const result = await pool.query(`SELECT d.id,d.name,d.description,d.category,d.logo_url AS "logoUrl",d.banner_url AS "bannerUrl",d.meeting_location AS "meetingLocation",d.meeting_schedule AS "meetingSchedule",d.community_links AS "communityLinks",d.telegram_type AS "telegramType",d.telegram_username AS "telegramUsername",d.telegram_public_link AS "telegramPublicLink",d.telegram_invite_link AS "telegramInviteLink",d.leader_user_id AS "leaderUserId",d.organization_id AS "organizationId",d.visibility,d.is_active AS "isActive",o.name AS "organizationName",COALESCE(u.name,d.leader_name) AS "leaderName",(SELECT COUNT(*)::int FROM department_members dm WHERE dm.department_id=d.id AND dm.status='ACTIVE') AS "memberCount" FROM departments d LEFT JOIN organizations o ON o.id=d.organization_id LEFT JOIN users u ON u.id=d.leader_user_id WHERE d.deleted_at IS NULL ORDER BY d.name`);
+    return response.json({ success: true, data: result.rows.map(withAdminCommunityLinks) });
+  } catch (error) {
+    return requestError(error, response);
+  }
 }
 
 export async function listOrganizations(_request, response) {
@@ -39,22 +44,48 @@ export async function createOrganization(request, response) {
     return response.status(201).json({ success: true, data: result.rows[0] });
   } catch (error) { return requestError(error, response); }
 }
+async function registeredGroupLeader(client, value) {
+  if (value == null || value === '') return null;
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id < 1) throw Object.assign(new Error('Select a registered member or staff account as the leader.'), { status: 400 });
+  const result = await client.query(
+    `SELECT id,name FROM users WHERE id=$1 AND account_status='ACTIVE' AND deleted_at IS NULL`,
+    [id],
+  );
+  if (!result.rowCount) throw Object.assign(new Error('The selected leader account is not active or no longer exists.'), { status: 400 });
+  return result.rows[0];
+}
+
 export async function createDepartment(request,response) {
+  let client;
   try {
     const body = request.body ?? {};
     const name = requiredString(body.name, 'Department name', 160);
     const visibility = String(body.visibility ?? 'PUBLIC').toUpperCase();
     if (!['PUBLIC', 'PRIVATE'].includes(visibility)) throw Object.assign(new Error('Visibility must be PUBLIC or PRIVATE.'), { status: 400 });
     const telegram = registrationTelegramFields(body);
-    const result = await pool.query(
-      `INSERT INTO departments(name,description,organization_id,leader_user_id,leader_name,leader_phone,contact_email,category,logo_url,banner_url,visibility,is_active,telegram_type,telegram_username,telegram_public_link,telegram_invite_link,telegram_connection_status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'UNVERIFIED')
-       RETURNING id,name,description,leader_name AS "leaderName",leader_phone AS "leaderPhone",contact_email AS "contactEmail",category,logo_url AS "logoUrl",banner_url AS "bannerUrl",visibility,is_active AS "isActive",telegram_connection_status AS "telegramConnectionStatus"`,
-      [name, optionalText(body.description, 5000), body.organizationId || null, body.leaderUserId || null, optionalText(body.leaderName, 160), optionalText(body.leaderPhone, 40), optionalText(body.contactEmail, 320), optionalText(body.category, 100), optionalHttpsUrl(body.logoUrl, 'Logo URL'), optionalHttpsUrl(body.bannerUrl, 'Banner URL'), visibility, body.isActive !== false, ...telegram],
+    const communityLinks = registrationCommunityLinks(body.communityLinks);
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const leader = await registeredGroupLeader(client, body.leaderUserId);
+    const result = await client.query(
+      `INSERT INTO departments(name,description,organization_id,leader_user_id,leader_name,leader_phone,contact_email,category,logo_url,banner_url,visibility,is_active,telegram_type,telegram_username,telegram_public_link,telegram_invite_link,telegram_connection_status,community_links,meeting_location,meeting_schedule)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'UNVERIFIED',$17::jsonb,$18,$19)
+       RETURNING id,name,description,leader_user_id AS "leaderUserId",leader_name AS "leaderName",leader_phone AS "leaderPhone",contact_email AS "contactEmail",category,logo_url AS "logoUrl",banner_url AS "bannerUrl",visibility,is_active AS "isActive",telegram_connection_status AS "telegramConnectionStatus",community_links AS "communityLinks",meeting_location AS "meetingLocation",meeting_schedule AS "meetingSchedule"`,
+      [name, optionalText(body.description, 5000), body.organizationId || null, leader?.id ?? null, leader?.name ?? null, optionalText(body.leaderPhone, 40), optionalText(body.contactEmail, 320), optionalText(body.category, 100), optionalHttpsUrl(body.logoUrl, 'Logo URL'), optionalHttpsUrl(body.bannerUrl, 'Banner URL'), visibility, body.isActive !== false, ...telegram, JSON.stringify(communityLinks), optionalText(body.meetingLocation, 500), optionalText(body.meetingSchedule, 500)],
     );
-    await audit({ actorUserId: request.user.id, action: 'DEPARTMENT_CREATED', entityType: 'department', entityId: result.rows[0].id, after: result.rows[0], ipAddress: clientIp(request) });
+    if (leader) await client.query(
+      `INSERT INTO department_members(user_id,department_id,role,status) VALUES($1,$2,'LEADER','ACTIVE')
+       ON CONFLICT(user_id,department_id) DO UPDATE SET role='LEADER',status='ACTIVE'`,
+      [leader.id, result.rows[0].id],
+    );
+    await audit({ actorUserId: request.user.id, action: 'DEPARTMENT_CREATED', entityType: 'department', entityId: result.rows[0].id, after: result.rows[0], ipAddress: clientIp(request) }, client);
+    await client.query('COMMIT');
     return response.status(201).json({ success: true, data: result.rows[0] });
-  } catch (error) { return requestError(error, response); }
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    return requestError(error, response);
+  } finally { client?.release(); }
 }
 
 function optionalText(value, max) {
@@ -67,7 +98,7 @@ function optionalHttpsUrl(value, label, allowedHosts = null) {
   if (typeof value !== 'string' || value.length > 2000) throw Object.assign(new Error(`${label} must be a valid HTTPS URL.`), { status: 400 });
   let url;
   try { url = new URL(value); } catch { throw Object.assign(new Error(`${label} must be a valid HTTPS URL.`), { status: 400 }); }
-  if (url.protocol !== 'https:' || (allowedHosts && !allowedHosts.includes(url.hostname.toLowerCase()))) {
+  if (url.protocol !== 'https:' || url.username || url.password || (allowedHosts && !allowedHosts.includes(url.hostname.toLowerCase()))) {
     throw Object.assign(new Error(`${label} must use an approved HTTPS address.`), { status: 400 });
   }
   return url.toString();
@@ -76,15 +107,97 @@ function optionalHttpsUrl(value, label, allowedHosts = null) {
 function registrationTelegramFields(body) {
   const type = String(body.telegramType ?? 'none').toLowerCase();
   if (!['none', 'group', 'channel'].includes(type)) throw Object.assign(new Error('Telegram destination type is invalid.'), { status: 400 });
+  if (type === 'none') return ['none', null, null, null];
   const username = optionalText(body.telegramUsername, 64);
   if (username && !/^@?[A-Za-z0-9_]{5,32}$/.test(username)) throw Object.assign(new Error('Enter a valid Telegram username.'), { status: 400 });
-  return [type, username, optionalHttpsUrl(body.telegramPublicLink, 'Telegram public link', ['t.me', 'www.t.me']), optionalHttpsUrl(body.telegramInviteLink, 'Telegram invitation link', ['t.me', 'www.t.me'])];
+  const publicLink = optionalHttpsUrl(body.telegramPublicLink, 'Telegram public link', ['t.me', 'www.t.me']);
+  const inviteLink = optionalHttpsUrl(body.telegramInviteLink, 'Telegram invitation link', ['t.me', 'www.t.me']);
+  if (!username && !publicLink && !inviteLink) throw Object.assign(new Error('Add a Telegram username or link, or choose "Not connected".'), { status: 400 });
+  return [type, username, publicLink, inviteLink];
+}
+
+function registrationCommunityLinks(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 20) {
+    throw Object.assign(new Error('Provide no more than 20 community links.'), { status: 400 });
+  }
+  const allowedPlatforms = new Set(['telegram', 'facebook', 'youtube']);
+  return value.map((link) => {
+    const platform = typeof link?.platform === 'string' ? link.platform.toLowerCase() : '';
+    if (!allowedPlatforms.has(platform)) {
+      throw Object.assign(new Error('Choose a supported community link platform.'), { status: 400 });
+    }
+    const url = optionalHttpsUrl(link.url, 'Community link URL');
+    if (!url) throw Object.assign(new Error('Every community link requires a URL.'), { status: 400 });
+    if (link.enabled != null && typeof link.enabled !== 'boolean') {
+      throw Object.assign(new Error('Community link enabled state must be true or false.'), { status: 400 });
+    }
+    return {
+      platform,
+      label: optionalText(link.label, 80) || platform,
+      url,
+      enabled: link.enabled !== false,
+    };
+  });
+}
+
+function withAdminCommunityLinks(group) {
+  const supportedPlatforms = new Set(['telegram', 'facebook', 'youtube']);
+  const links = Array.isArray(group.communityLinks)
+    ? group.communityLinks.filter((link) => supportedPlatforms.has(String(link?.platform ?? '').toLowerCase()))
+    : [];
+  const configuredPlatforms = new Set(links.map((link) => link?.platform));
+  if (!configuredPlatforms.has('telegram')) {
+    if (group.telegramPublicLink) links.push({ platform: 'telegram', label: 'Telegram public link', url: group.telegramPublicLink, enabled: true });
+    if (group.telegramInviteLink) links.push({ platform: 'telegram', label: 'Telegram invitation link', url: group.telegramInviteLink, enabled: true });
+  }
+  if (group.facebookUrl && !configuredPlatforms.has('facebook')) {
+    links.push({ platform: 'facebook', label: 'Facebook group', url: group.facebookUrl, enabled: true });
+  }
+  if (group.youtubeUrl && !configuredPlatforms.has('youtube')) {
+    links.push({ platform: 'youtube', label: 'YouTube channel', url: group.youtubeUrl, enabled: true });
+  }
+  return { ...group, communityLinks: links };
+}
+
+export async function updateDepartmentCommunityLinks(request, response) {
+  return updateCommunityLinks(request, response, 'departments', 'department', 'DEPARTMENT_COMMUNITY_LINKS_UPDATED');
+}
+
+export async function updateBibleStudyCommunityLinks(request, response) {
+  return updateCommunityLinks(request, response, 'bible_study_groups', 'bible_study_group', 'BIBLE_STUDY_COMMUNITY_LINKS_UPDATED');
+}
+
+async function updateCommunityLinks(request, response, table, entityType, action) {
+  try {
+    const id = Number(request.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      return response.status(400).json({ error: 'A valid group ID is required.' });
+    }
+    if (!Array.isArray(request.body?.communityLinks)) {
+      return response.status(400).json({ error: 'Community links must be provided as a list.' });
+    }
+    const communityLinks = registrationCommunityLinks(request.body?.communityLinks);
+    const result = await pool.query(
+      `UPDATE ${table}
+       SET community_links = $1::jsonb, telegram_public_link = NULL, telegram_invite_link = NULL,
+           facebook_url = NULL, youtube_url = NULL
+       WHERE id = $2 AND deleted_at IS NULL
+       RETURNING id, community_links AS "communityLinks"`,
+      [JSON.stringify(communityLinks), id],
+    );
+    if (!result.rowCount) return response.status(404).json({ error: 'Group was not found.' });
+    await audit({ actorUserId: request.user.id, action, entityType, entityId: id, after: result.rows[0], ipAddress: clientIp(request) });
+    return response.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    return requestError(error, response);
+  }
 }
 
 export async function listBibleStudyGroups(_request, response) {
   try {
-    const result = await pool.query(`SELECT g.id,g.name,g.description,g.meeting_schedule AS "meetingSchedule",g.location_text AS location,g.capacity,g.is_active AS "isActive",g.is_public AS "isPublic",COALESCE(u.name,g.leader_name) AS "leaderName",g.telegram_connection_status AS "telegramConnectionStatus" FROM bible_study_groups g LEFT JOIN users u ON u.id=g.leader_user_id WHERE g.deleted_at IS NULL ORDER BY g.name`);
-    return response.json({ success: true, data: result.rows });
+    const result = await pool.query(`SELECT g.id,g.name,g.description,g.meeting_schedule AS "meetingSchedule",g.location_text AS location,g.location_text AS "locationText",g.group_profile_image AS "groupProfileImage",g.banner_image AS "bannerImage",g.group_email AS "groupEmail",g.google_maps_link AS "googleMapsLink",g.current_study AS "currentStudy",g.community_links AS "communityLinks",g.telegram_type AS "telegramType",g.telegram_username AS "telegramUsername",g.telegram_public_link AS "telegramPublicLink",g.telegram_invite_link AS "telegramInviteLink",g.leader_user_id AS "leaderUserId",g.visibility,g.capacity,g.is_active AS "isActive",g.is_public AS "isPublic",COALESCE(u.name,g.leader_name) AS "leaderName",g.telegram_connection_status AS "telegramConnectionStatus",(SELECT COUNT(*)::int FROM bible_study_memberships bsm WHERE bsm.bible_study_group_id=g.id AND bsm.status='ACTIVE') AS "memberCount" FROM bible_study_groups g LEFT JOIN users u ON u.id=g.leader_user_id WHERE g.deleted_at IS NULL ORDER BY g.name`);
+    return response.json({ success: true, data: result.rows.map(withAdminCommunityLinks) });
   } catch (error) { return requestError(error, response); }
 }
 function programDefaults(body = {}) {
@@ -94,9 +207,22 @@ function programDefaults(body = {}) {
   const startTime = typeof body.defaultStartTime === 'string' && body.defaultStartTime ? body.defaultStartTime : null;
   const endTime = typeof body.defaultEndTime === 'string' && body.defaultEndTime ? body.defaultEndTime : null;
   const weekday = body.recurrenceWeekday === '' || body.recurrenceWeekday == null ? null : Number(body.recurrenceWeekday);
+  const dateValue = (value, label) => {
+    if (value == null || value === '') return null;
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)
+      || Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+      || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) {
+      throw Object.assign(new Error(`${label} must be a valid calendar date.`), { status: 400 });
+    }
+    return value;
+  };
+  const recurrenceStartDate = dateValue(body.recurrenceStartDate, 'Recurrence start date');
+  const recurrenceEndDate = dateValue(body.recurrenceEndDate, 'Recurrence end date');
   if ((startTime && !/^\d{2}:\d{2}$/.test(startTime)) || (endTime && !/^\d{2}:\d{2}$/.test(endTime))) throw Object.assign(new Error('Use valid default start and end times.'), { status: 400 });
   if ((startTime === null) !== (endTime === null)) throw Object.assign(new Error('Provide both default start and end times.'), { status: 400 });
   if (weekday !== null && (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !startTime)) throw Object.assign(new Error('Weekly recurrence requires a weekday and default start and end times.'), { status: 400 });
+  if (recurrenceStartDate && recurrenceEndDate && recurrenceStartDate > recurrenceEndDate) throw Object.assign(new Error('Recurrence end date must be on or after its start date.'), { status: 400 });
+  if (weekday === null && (recurrenceStartDate || recurrenceEndDate)) throw Object.assign(new Error('Choose a weekly recurrence day before setting a recurrence date range.'), { status: 400 });
   return {
     name,
     description: typeof body.description === 'string' ? body.description.trim().slice(0, 5000) || null : null,
@@ -107,24 +233,30 @@ function programDefaults(body = {}) {
     defaultStartTime: startTime,
     defaultEndTime: endTime,
     recurrenceWeekday: weekday,
+    recurrenceStartDate,
+    recurrenceEndDate,
     notifyMembers: body.notifyMembers === true,
     notifyAllMembers: body.notifyAllMembers === true,
+    isActive: body.isActive !== false,
   };
 }
 
 async function syncProgramSchedule(client, programId, defaults) {
   const existing = await client.query('SELECT id FROM program_schedules WHERE program_id=$1 ORDER BY id LIMIT 1 FOR UPDATE', [programId]);
   if (defaults.recurrenceWeekday === null) {
-    if (existing.rowCount) await client.query("UPDATE program_schedules SET status='CANCELLED',updated_at=NOW() WHERE id=$1", [existing.rows[0].id]);
+    if (existing.rowCount) await client.query("UPDATE program_schedules SET status='CANCELLED',recurrence_start_date=NULL,recurrence_end_date=NULL,updated_at=NOW() WHERE id=$1", [existing.rows[0].id]);
     return;
   }
-  const scheduleValues = [programId, defaults.recurrenceWeekday, defaults.defaultStartTime, defaults.defaultEndTime, defaults.defaultLocation];
+  const status = defaults.isActive ? 'SCHEDULED' : 'CANCELLED';
+  const scheduleValues = [programId, defaults.recurrenceWeekday, defaults.defaultStartTime, defaults.defaultEndTime, defaults.defaultLocation, defaults.recurrenceStartDate, defaults.recurrenceEndDate, status];
   if (existing.rowCount) {
     await client.query(`UPDATE program_schedules SET weekday=$2,start_time=$3,end_time=$4,location_text=$5,
-      recurrence_rule='FREQ=WEEKLY',status='SCHEDULED',updated_at=NOW() WHERE id=$1`, [existing.rows[0].id, ...scheduleValues.slice(1)]);
+      recurrence_start_date=$6,recurrence_end_date=$7,recurrence_rule='FREQ=WEEKLY',
+      status=$8,updated_at=NOW() WHERE id=$1`, [existing.rows[0].id, ...scheduleValues.slice(1)]);
   } else {
-    await client.query(`INSERT INTO program_schedules(program_id,weekday,start_time,end_time,location_text,recurrence_rule,timezone,status)
-      VALUES($1,$2,$3,$4,$5,'FREQ=WEEKLY','Africa/Addis_Ababa','SCHEDULED')`, scheduleValues);
+    await client.query(`INSERT INTO program_schedules(program_id,weekday,start_time,end_time,location_text,
+      recurrence_start_date,recurrence_end_date,recurrence_rule,timezone,status)
+      VALUES($1,$2,$3,$4,$5,$6,$7,'FREQ=WEEKLY','Africa/Addis_Ababa',$8)`, scheduleValues);
   }
 }
 
@@ -133,12 +265,17 @@ export async function listPrograms(_request, response) {
     const result = await pool.query(`SELECT p.id,p.name,p.description,p.category,p.image_url AS "imageUrl",
       p.default_location AS "defaultLocation",p.default_start_time::text AS "defaultStartTime",
       p.default_end_time::text AS "defaultEndTime",p.recurrence_weekday AS "recurrenceWeekday",
+      s.recurrence_start_date AS "recurrenceStartDate",s.recurrence_end_date AS "recurrenceEndDate",
       p.notify_members AS "notifyMembers",p.notify_all_members AS "notifyAllMembers",
       p.is_active AS "isActive",p.department_id AS "departmentId",d.name AS "departmentName",
       count(e.id)::int AS "promotedEventCount"
       FROM programs p LEFT JOIN departments d ON d.id=p.department_id
+      LEFT JOIN LATERAL (
+        SELECT recurrence_start_date,recurrence_end_date
+        FROM program_schedules WHERE program_id=p.id ORDER BY id LIMIT 1
+      ) s ON TRUE
       LEFT JOIN events e ON e.program_id=p.id AND e.deleted_at IS NULL
-      WHERE p.deleted_at IS NULL GROUP BY p.id,d.name ORDER BY p.name`);
+      WHERE p.deleted_at IS NULL GROUP BY p.id,d.name,s.recurrence_start_date,s.recurrence_end_date ORDER BY p.name`);
     return response.json({ success: true, data: result.rows });
   } catch (error) { return requestError(error, response); }
 }
@@ -149,13 +286,13 @@ export async function createProgram(request, response) {
     const defaults = programDefaults(request.body);
     await client.query('BEGIN');
     const result = await client.query(`INSERT INTO programs(name,description,department_id,created_by,category,image_url,
-      default_location,default_start_time,default_end_time,recurrence_weekday,notify_members,notify_all_members)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      default_location,default_start_time,default_end_time,recurrence_weekday,notify_members,notify_all_members,is_active)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
       RETURNING id,name,description,category,image_url AS "imageUrl",default_location AS "defaultLocation",
       default_start_time::text AS "defaultStartTime",default_end_time::text AS "defaultEndTime",recurrence_weekday AS "recurrenceWeekday",
       notify_members AS "notifyMembers",notify_all_members AS "notifyAllMembers",is_active AS "isActive"`,
     [defaults.name, defaults.description, defaults.departmentId, request.user.id, defaults.category, defaults.imageUrl,
-     defaults.defaultLocation, defaults.defaultStartTime, defaults.defaultEndTime, defaults.recurrenceWeekday, defaults.notifyMembers, defaults.notifyAllMembers]);
+     defaults.defaultLocation, defaults.defaultStartTime, defaults.defaultEndTime, defaults.recurrenceWeekday, defaults.notifyMembers, defaults.notifyAllMembers, defaults.isActive]);
     await syncProgramSchedule(client, result.rows[0].id, defaults);
     await client.query('COMMIT');
     await audit({ actorUserId: request.user.id, action: 'PROGRAM_CREATED', entityType: 'program', entityId: result.rows[0].id, after: result.rows[0], ipAddress: clientIp(request) });
@@ -173,12 +310,12 @@ export async function updateProgram(request, response) {
     if (!existing.rowCount) { await client.query('ROLLBACK'); return response.status(404).json({ error: 'Program template was not found.' }); }
     const result = await client.query(`UPDATE programs SET name=$2,description=$3,category=$4,department_id=$5,image_url=$6,
       default_location=$7,default_start_time=$8,default_end_time=$9,recurrence_weekday=$10,
-      notify_members=$11,notify_all_members=$12,updated_at=NOW() WHERE id=$1
+      notify_members=$11,notify_all_members=$12,is_active=$13,updated_at=NOW() WHERE id=$1
       RETURNING id,name,description,category,image_url AS "imageUrl",default_location AS "defaultLocation",
       default_start_time::text AS "defaultStartTime",default_end_time::text AS "defaultEndTime",recurrence_weekday AS "recurrenceWeekday",
       notify_members AS "notifyMembers",notify_all_members AS "notifyAllMembers",is_active AS "isActive"`,
     [request.params.id, defaults.name, defaults.description, defaults.category, defaults.departmentId, defaults.imageUrl,
-     defaults.defaultLocation, defaults.defaultStartTime, defaults.defaultEndTime, defaults.recurrenceWeekday, defaults.notifyMembers, defaults.notifyAllMembers]);
+     defaults.defaultLocation, defaults.defaultStartTime, defaults.defaultEndTime, defaults.recurrenceWeekday, defaults.notifyMembers, defaults.notifyAllMembers, defaults.isActive]);
     await syncProgramSchedule(client, request.params.id, defaults);
     await client.query('COMMIT');
     await audit({ actorUserId: request.user.id, action: 'PROGRAM_TEMPLATE_UPDATED', entityType: 'program', entityId: request.params.id, after: result.rows[0], ipAddress: clientIp(request) });
@@ -272,6 +409,7 @@ export async function setScheduleOverride(request, response) {
 	} catch (error) { return requestError(error, response); }
 }
 export async function createBibleStudyGroup(request,response) {
+  let client;
   try {
     const body = request.body ?? {};
     const name = requiredString(body.name, 'Group name', 160);
@@ -280,15 +418,27 @@ export async function createBibleStudyGroup(request,response) {
     const mapsLink = optionalHttpsUrl(body.googleMapsLink, 'Google Maps link', ['maps.google.com', 'maps.app.goo.gl', 'www.google.com']);
     if (mapsLink && new URL(mapsLink).hostname === 'www.google.com' && !new URL(mapsLink).pathname.startsWith('/maps')) throw Object.assign(new Error('Provide a Google Maps link.'), { status: 400 });
     const telegram = registrationTelegramFields(body);
-    const result = await pool.query(
-      `INSERT INTO bible_study_groups(name,description,meeting_schedule,leader_user_id,is_public,group_email,location_text,google_maps_link,current_study,capacity,group_profile_image,banner_image,leader_name,leader_phone,is_active,telegram_type,telegram_username,telegram_public_link,telegram_invite_link,telegram_connection_status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'UNVERIFIED')
-       RETURNING id,name,description,meeting_schedule AS "meetingSchedule",group_email AS "groupEmail",location_text AS "locationText",google_maps_link AS "googleMapsLink",current_study AS "currentStudy",capacity,leader_name AS "leaderName",leader_phone AS "leaderPhone",is_public AS "isPublic",is_active AS "isActive",telegram_connection_status AS "telegramConnectionStatus"`,
-      [name, optionalText(body.description, 5000), optionalText(body.meetingSchedule, 500), body.leaderUserId || null, body.isPublic !== false, optionalText(body.groupEmail, 320), optionalText(body.locationText, 500), mapsLink, optionalText(body.currentStudy, 500), capacity, optionalHttpsUrl(body.groupProfileImage, 'Profile image URL'), optionalHttpsUrl(body.bannerImage, 'Banner image URL'), optionalText(body.leaderName, 160), optionalText(body.leaderPhone, 40), body.isActive !== false, ...telegram],
+    const communityLinks = registrationCommunityLinks(body.communityLinks);
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const leader = await registeredGroupLeader(client, body.leaderUserId);
+    const result = await client.query(
+      `INSERT INTO bible_study_groups(name,description,meeting_schedule,leader_user_id,is_public,visibility,group_email,location_text,google_maps_link,current_study,capacity,group_profile_image,banner_image,leader_name,leader_phone,is_active,telegram_type,telegram_username,telegram_public_link,telegram_invite_link,telegram_connection_status,community_links)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'UNVERIFIED',$21::jsonb)
+       RETURNING id,name,description,meeting_schedule AS "meetingSchedule",leader_user_id AS "leaderUserId",group_email AS "groupEmail",location_text AS "locationText",google_maps_link AS "googleMapsLink",current_study AS "currentStudy",capacity,leader_name AS "leaderName",leader_phone AS "leaderPhone",is_public AS "isPublic",is_active AS "isActive",telegram_connection_status AS "telegramConnectionStatus",community_links AS "communityLinks"`,
+      [name, optionalText(body.description, 5000), optionalText(body.meetingSchedule, 500), leader?.id ?? null, body.isPublic !== false, body.isPublic === false ? 'private' : 'public', optionalText(body.groupEmail, 320), optionalText(body.locationText, 500), mapsLink, optionalText(body.currentStudy, 500), capacity, optionalHttpsUrl(body.groupProfileImage, 'Profile image URL'), optionalHttpsUrl(body.bannerImage, 'Banner image URL'), leader?.name ?? null, optionalText(body.leaderPhone, 40), body.isActive !== false, ...telegram, JSON.stringify(communityLinks)],
     );
-    await audit({ actorUserId: request.user.id, action: 'BIBLE_STUDY_GROUP_CREATED', entityType: 'bible_study_group', entityId: result.rows[0].id, after: result.rows[0], ipAddress: clientIp(request) });
+    if (leader) await client.query(
+      `INSERT INTO bible_study_memberships(user_id,bible_study_group_id,role,status) VALUES($1,$2,'LEADER','ACTIVE')`,
+      [leader.id, result.rows[0].id],
+    );
+    await audit({ actorUserId: request.user.id, action: 'BIBLE_STUDY_GROUP_CREATED', entityType: 'bible_study_group', entityId: result.rows[0].id, after: result.rows[0], ipAddress: clientIp(request) }, client);
+    await client.query('COMMIT');
     return response.status(201).json({ success: true, data: result.rows[0] });
-  } catch (error) { return requestError(error, response); }
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    return requestError(error, response);
+  } finally { client?.release(); }
 }
 
 export async function getDepartmentById(request, response) {
@@ -298,6 +448,8 @@ export async function getDepartmentById(request, response) {
         d.category, d.leader_user_id AS "leaderUserId", d.leader_phone AS "leaderPhone", d.is_active AS "isActive",
         d.visibility, d.enrollment_open AS "enrollmentOpen", d.requires_approval AS "requiresApproval",
         d.min_age AS "minAge", d.max_age AS "maxAge", d.eligibility_enabled AS "eligibilityEnabled",
+        d.organization_id AS "organizationId", d.meeting_location AS "meetingLocation",
+        d.meeting_schedule AS "meetingSchedule", d.community_links AS "communityLinks",
         d.telegram_type AS "telegramType", d.telegram_username AS "telegramUsername",
         d.telegram_public_link AS "telegramPublicLink", d.telegram_invite_link AS "telegramInviteLink",
         d.telegram_verified_at AS "telegramVerifiedAt", d.telegram_verify_error AS "telegramVerifyError",
@@ -316,7 +468,7 @@ export async function getDepartmentById(request, response) {
       `SELECT u.id, u.name, u.email, u.phone, u.account_status AS "accountStatus", dm.role AS "memberRole"
        FROM department_members dm
        JOIN users u ON u.id = dm.user_id
-       WHERE dm.department_id = $1
+       WHERE dm.department_id = $1 AND dm.status='ACTIVE'
        ORDER BY u.name`,
       [request.params.id],
     );
@@ -345,6 +497,7 @@ export async function getBibleStudyGroupById(request, response) {
         g.group_email AS "groupEmail", g.meeting_schedule AS "meetingSchedule", g.current_study AS "currentStudy",
         g.capacity AS "capacity", g.group_profile_image AS "groupProfileImage", g.banner_image AS "bannerImage",
         g.leader_user_id AS "leaderUserId", g.leader_phone AS "leaderPhone", g.is_public AS "isPublic",
+        g.is_active AS "isActive", g.visibility, g.community_links AS "communityLinks",
         g.telegram_type AS "telegramType", g.telegram_username AS "telegramUsername",
         g.telegram_public_link AS "telegramPublicLink", g.telegram_invite_link AS "telegramInviteLink",
         g.telegram_verified_at AS "telegramVerifiedAt", g.telegram_verify_error AS "telegramVerifyError",
@@ -362,7 +515,7 @@ export async function getBibleStudyGroupById(request, response) {
       `SELECT u.id, u.name, u.email, u.phone, u.account_status AS "accountStatus", bsm.role AS "memberRole"
        FROM bible_study_memberships bsm
        JOIN users u ON u.id = bsm.user_id
-       WHERE bsm.bible_study_group_id = $1
+       WHERE bsm.bible_study_group_id = $1 AND bsm.status='ACTIVE'
        ORDER BY u.name`,
       [request.params.id],
     );

@@ -55,24 +55,33 @@ export const organizationsService = {
 };
 
 export const givingService = {
-  campaigns: () => envelope('/public/campaigns'),
-  campaign: (id) => envelope(`/public/campaigns/${id}`),
-  myHistory: () => apiClient.get('/users/me/giving'),
-  submit: (payload) => apiClient.post('/users/me/giving', payload),
-  recordPledge: (payload) => apiClient.post('/users/me/giving', payload),
   // finance
   financeQueue: (params) => apiClient.get('/admin/giving', { params }),
   approve: (id, payload = {}) => apiClient.patch(`/admin/giving/${id}/approve`, payload),
   reject: (id, payload) => apiClient.patch(`/admin/giving/${id}/reject`, payload),
   listCampaigns: () => apiClient.get('/campaigns'),
+  adminCampaign: (id) => apiClient.get(`/campaigns/${id}`),
   createCampaign: (payload) => apiClient.post('/campaigns', payload),
   updateCampaign: (id, payload) => apiClient.patch(`/campaigns/${id}`, payload),
   archiveCampaign: (id) => apiClient.delete(`/campaigns/${id}`),
 };
 
+export const groupService = {
+  list: () => apiClient.get('/groups'),
+  detail: (id, type) => apiClient.get(`/groups/${id}`, { params: { type } }),
+  followStatus: (id, type) => apiClient.get(`/groups/${id}/follow-status`, { params: { type } }),
+  follow: (id, type) => apiClient.post(`/groups/${id}/follow`, null, { params: { type } }),
+  unfollow: (id, type) => apiClient.delete(`/groups/${id}/follow`, { params: { type } }),
+  followed: () => apiClient.get('/groups/followed'),
+  joined: () => apiClient.get('/groups/joined'),
+  posts: (id, type) => apiClient.get(`/groups/${id}/posts`, { params: { type } }),
+  createPost: (id, type, payload) => apiClient.post(`/groups/${id}/posts`, payload, { params: { type } }),
+  notificationPreferences: (id, type, payload) =>
+    apiClient.patch(`/groups/${id}/notification-preferences`, payload, { params: { type } }),
+};
+
 export const contentService = {
   sermons: () => envelope('/public/sermons'),
-  announcements: () => envelope('/public/announcements'),
   verse: () => envelope('/public/verse'),
   banners: () => envelope('/public/banners'),
   ministries: () => envelope('/public/ministries'),
@@ -84,15 +93,11 @@ export const contentService = {
     if (title) form.append('title', title);
     if (isThumbnail !== undefined) form.append('isThumbnail', String(isThumbnail));
     return apiClient.post('/admin/media/upload', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress,
     });
   },
   createMedia: (payload) => apiClient.post('/admin/media', payload),
   updateMedia: (id, payload) => apiClient.patch(`/admin/media/${id}`, payload),
-  listAnnouncements: () => apiClient.get('/admin/announcements'),
-  createAnnouncement: (payload) => apiClient.post('/admin/announcements', payload),
-  updateAnnouncement: (id, payload) => apiClient.patch(`/admin/announcements/${id}`, payload),
   listMedia: (params) => apiClient.get('/admin/media', { params }),
   deleteMedia: (id) => apiClient.delete(`/admin/media/${id}`),
   // staff content management
@@ -115,7 +120,20 @@ export const adminService = {
   reports: (type, params) => apiClient.get(`/admin/reports/${type}`, { params }),
   telegramInbox: (params) => apiClient.get('/admin/telegram/messages', { params }),
   replyToTelegramMessage: (id, payload) => apiClient.post(`/admin/telegram/messages/${id}/replies`, payload),
+  addTelegramMessageNote: (id, payload) => apiClient.post(`/admin/telegram/messages/${id}/notes`, payload),
   updateTelegramMessage: (id, payload) => apiClient.patch(`/admin/telegram/messages/${id}`, payload),
+  telegramManagementOverview: () => apiClient.get('/admin/telegram/overview'),
+  checkTelegramConnection: () => apiClient.get('/admin/telegram/connection'),
+  sendTelegramAdminTest: () => apiClient.post('/admin/telegram/test'),
+  telegramMenuItems: () => apiClient.get('/admin/telegram/menu-items'),
+  createTelegramMenuItem: (payload) => apiClient.post('/admin/telegram/menu-items', payload),
+  updateTelegramMenuItem: (id, payload) => apiClient.patch(`/admin/telegram/menu-items/${id}`, payload),
+  deleteTelegramMenuItem: (id) => apiClient.delete(`/admin/telegram/menu-items/${id}`),
+  telegramAutoReplies: () => apiClient.get('/admin/telegram/auto-replies'),
+  createTelegramAutoReply: (payload) => apiClient.post('/admin/telegram/auto-replies', payload),
+  updateTelegramAutoReply: (id, payload) => apiClient.patch(`/admin/telegram/auto-replies/${id}`, payload),
+  deleteTelegramAutoReply: (id) => apiClient.delete(`/admin/telegram/auto-replies/${id}`),
+  previewTelegramAutoReply: (payload) => apiClient.post('/admin/telegram/auto-replies/preview', payload),
   listPermissions: () => apiClient.get('/admin/permissions'),
   createRole: (payload) => apiClient.post('/admin/roles', payload),
   updateRole: (id, payload) => apiClient.patch('/admin/roles/' + id, payload),
@@ -131,6 +149,7 @@ export const adminService = {
 
 export default {
   eventsService,
+  groupService,
   bibleStudyService,
   organizationsService,
   givingService,

@@ -1,3 +1,15 @@
+const DATABASE_UNAVAILABLE_CODES = new Set([
+	'ECONNRESET',
+	'ECONNREFUSED',
+	'ETIMEDOUT',
+	'EHOSTUNREACH',
+	'ENETUNREACH',
+	'53300',
+	'57P01',
+	'57P02',
+	'57P03',
+]);
+
 export function pageParams(query) {
 	const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
 	const limit = Math.min(100, Math.max(1, Number.parseInt(query.limit, 10) || 24));
@@ -13,7 +25,19 @@ export function requestError(error, response) {
 	if (error.code === '23505') return response.status(409).json({ error: 'A record with those unique values already exists.' });
 	if (error.code === '23503') return response.status(409).json({ error: 'This record is still referenced by another record.' });
 	if (error.code === '23514' || error.code === '22P02') return response.status(400).json({ error: 'One or more values are invalid.' });
-	console.error('[api] request failed:', error.message);
+	if (error.code?.startsWith('08')
+		|| DATABASE_UNAVAILABLE_CODES.has(error.code)
+		|| /^Connection terminated due to connection timeout\.?$/i.test(error.message ?? '')) {
+		console.error('[api] database unavailable:', { code: error.code ?? null });
+		return response.status(503).json({ error: 'The database is temporarily unavailable.' });
+	}
+	console.error('[api] request failed:', {
+		message: error.message,
+		code: error.code,
+		table: error.table,
+		column: error.column,
+		constraint: error.constraint,
+	});
 	return response.status(500).json({ error: 'The request could not be completed.' });
 }
 

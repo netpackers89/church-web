@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Bell, BookOpen, Building2, KeyRound, Moon, Sun, UserRound, X, Monitor } from 'lucide-react';
+import { Bell, Building2, KeyRound, Moon, Sun, UserRound, X, Monitor } from 'lucide-react';
 import { useSettings } from '../../context/SettingsContext.jsx';
 import TelegramIntegrationPanel from './TelegramIntegrationPanel.jsx';
 
@@ -69,8 +69,7 @@ export default function MemberSettingsDialog({ open, onClose }) {
           </div>
           <nav className="member-settings-links" aria-label="Profile and memberships">
             <Link to="/me/profile/edit" onClick={onClose}><UserRound size={16} aria-hidden="true" />Edit profile</Link>
-            <Link to="/me/organizations" onClick={onClose}><Building2 size={16} aria-hidden="true" />My departments</Link>
-            <Link to="/me/bible-study" onClick={onClose}><BookOpen size={16} aria-hidden="true" />My Bible study groups</Link>
+            <Link to="/community" onClick={onClose}><Building2 size={16} aria-hidden="true" />Find community groups</Link>
           </nav>
         </section>
 

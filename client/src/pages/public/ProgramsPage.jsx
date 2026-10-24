@@ -6,6 +6,9 @@ import EmptyState from '../../components/ui/EmptyState.jsx';
 import ErrorMessage from '../../components/feedback/ErrorMessage.jsx';
 import useAsync from '../../hooks/useAsync.js';
 import { publicService, unwrap } from '../../services/api.js';
+import ProgramsCalendar from '../../components/events/ProgramsCalendar.jsx';
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function formatTime(value) {
   if (!value) return '';
@@ -26,11 +29,17 @@ function formatDate(value, timezone) {
   }).format(new Date(value));
 }
 
-function ScheduleCard({ schedule, timezone }) {
+function ScheduleCard({ program, timezone }) {
+  const schedule = program.schedules[0];
+  const recurringLabels = program.schedules.map((item) => {
+    const weekday = WEEKDAYS[Number(item.weekday)];
+    return weekday ? `Every ${weekday}${item.startTime ? ` · ${formatTime(item.startTime)}` : ''}` : null;
+  }).filter(Boolean);
   return (
     <article className="card card-pad-lg">
       <span className="eyebrow blue"><CalendarDays size={14} /> Regular program</span>
-      <h2 style={{ marginTop: '0.65rem' }}>{schedule.name}</h2>
+      <h2 style={{ marginTop: '0.65rem' }}>{program.name}</h2>
+      {recurringLabels.length ? <p className="muted" style={{ marginTop: '0.45rem' }}>{recurringLabels.join(' · ')}</p> : null}
       <p className="muted" style={{ marginTop: '0.65rem' }}>{formatDate(schedule.nextAt, schedule.timezone || timezone)}</p>
       {schedule.startTime ? (
         <p className="row muted" style={{ gap: '0.45rem', marginTop: '0.45rem' }}>
@@ -61,6 +70,13 @@ export default function ProgramsPage() {
     const list = unwrap(response);
     return Array.isArray(list) ? list.filter((event) => event.programType !== 'RECURRING') : [];
   }, []);
+  const regularPrograms = new Map();
+  for (const schedule of schedules.data?.data ?? []) {
+    const key = String(schedule.programId ?? schedule.name);
+    const program = regularPrograms.get(key) ?? { id: key, name: schedule.name, schedules: [] };
+    program.schedules.push(schedule);
+    regularPrograms.set(key, program);
+  }
 
   return (
     <>
@@ -81,9 +97,9 @@ export default function ProgramsPage() {
             <div className="event-grid">{Array.from({ length: 3 }, (_, index) => <CardSkeleton key={index} />)}</div>
           ) : schedules.error ? (
             <ErrorMessage error={schedules.error} onRetry={schedules.reload} title="Program schedules could not be loaded" />
-          ) : schedules.data?.data.length ? (
+          ) : regularPrograms.size ? (
             <div className="event-grid">
-              {schedules.data.data.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} timezone={schedules.data.timezone} />)}
+              {[...regularPrograms.values()].map((program) => <ScheduleCard key={program.id} program={program} timezone={schedules.data.timezone} />)}
             </div>
           ) : (
             <EmptyState icon={CalendarDays} title="No regular programs published" description="Please check back later or contact the church for the current schedule." action={{ to: '/contact', label: 'Contact the church' }} />
@@ -108,6 +124,7 @@ export default function ProgramsPage() {
           )}
         </div>
       </section>
+      <ProgramsCalendar />
     </>
   );
 }

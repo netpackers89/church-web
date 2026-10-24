@@ -1,12 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { pool } from '../config/db.js';
 import { config } from '../config/env.js';
-import { createNewChristianWelcomeEmail } from '../services/welcomeEmailTemplate.js';
-import { sendEmailNotification } from '../services/emailService.js';
-import { sendTelegramNotification } from '../services/telegramService.js';
+import { createNewChristianWelcomeEmail, createNewBelieverWelcomeEmail, sendEmailNotification } from '../email/index.js';
+import { sendTelegramNotification } from '../telegram/services/messaging.js';
 import { sendMemberWelcomeEmail, sendMemberWelcomeTelegram } from '../services/memberWelcomeService.js';
 import { clientIp } from '../services/auditService.js';
 import { pageParams, paged, requestError } from '../utils/http.js';
+import { createUser, findUserByEmail, findUserById, updateUserPassword, invalidateUserSessions } from '../config/db.js';
 
 const FOLLOWUP_STATUSES = new Set([
   'NEWCOMER', 'NEW_BELIEVER', 'FOLLOW_UP', 'TEACHING',
@@ -395,6 +397,261 @@ export async function retryMemberWelcome(request, response) {
       : await sendMemberWelcomeTelegram(userId, record.telegramChatId);
     if (delivery.status === 'FAILED') return response.status(502).json({ error: delivery.error || `The ${channel} welcome could not be delivered.` });
     return response.json({ success: true, data: { channel, status: delivery.status } });
+  } catch (error) {
+    return requestError(error, response);
+  }
+}
+
+const ACTIVATION_TOKEN_TTL_MINUTES = 60;
+
+function normalizeNewBelieverEmail(value) {
+  if (typeof value === 'string' && value.trim()) {
+    const email = value.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
+      throw fail('Enter a valid email address.', 400);
+    }
+    return email;
+  }
+  return null;
+}
+
+function normalizeNewBelieverPhone(value) {
+  if (typeof value === 'string' && value.trim()) {
+    let phone = value.trim().replace(/[\s()-]/g, '');
+    if (/^0[79]\d{8}$/.test(phone)) phone = `+251${phone.slice(1)}`;
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw fail('Enter a valid phone number in international format.', 400);
+    return phone;
+  }
+  return null;
+}
+
+function activationTokenHash(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+async function storeActivationToken(userId, token, expiresMinutes = ACTIVATION_TOKEN_TTL_MINUTES) {
+  const tokenHash = activationTokenHash(token);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`UPDATE temporary_activation_tokens SET consumed_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL`, [userId]);
+    await client.query(`INSERT INTO temporary_activation_tokens(user_id, token_hash, purpose, expires_at) VALUES($1, $2, 'NEW_BELIEVER_WELCOME', NOW() + INTERVAL '${expiresMinutes} minutes')`, [userId, tokenHash]);
+    await client.query('COMMIT');
+    return tokenHash;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function createNewBeliever(request, response) {
+  const client = await pool.connect();
+  try {
+    if (!request.user || !request.user.permissions.includes('new_christian.register')) {
+      throw fail('You are not authorized to register new believers.', 403);
+    }
+    const body = request.body ?? {};
+    const fullName = typeof body.fullName === 'string' ? body.fullName.trim() : '';
+    if (fullName.length < 2 || fullName.length > 160) throw fail('Full name must be between 2 and 160 characters.', 400);
+    const email = normalizeNewBelieverEmail(body.email);
+    const phone = normalizeNewBelieverPhone(body.phone);
+    if (!email && !phone) throw fail('Provide at least an email address or phone number.', 400);
+    const location = typeof body.location === 'string' ? body.location.trim() : '';
+    if (!location || location.length > 160) throw fail('Please provide a location.', 400);
+    const preferredLanguage = typeof body.preferredLanguage === 'string' ? body.preferredLanguage.trim().toLowerCase() : 'en';
+    if (!['en', 'am', 'om', 'ti'].includes(preferredLanguage)) throw fail('Select a supported preferred language.', 400);
+    const followupWorkerId = body.followupWorkerId ? positiveId(body.followupWorkerId, 'Follow-up worker') : null;
+    const groupIntegrationStatus = typeof body.groupIntegrationStatus === 'string' ? body.groupIntegrationStatus.trim() : 'NOT_INVITED';
+    await client.query('BEGIN');
+    let linkedUserId = null;
+    let accountCreated = false;
+    if (email) {
+      const existing = await client.query(`SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`, [email]);
+      if (existing.rowCount) linkedUserId = Number(existing.rows[0].id);
+    }
+    if (!linkedUserId && phone) {
+      const existing = await client.query(`SELECT id FROM users WHERE phone = $1 LIMIT 1`, [phone]);
+      if (existing.rowCount) linkedUserId = Number(existing.rows[0].id);
+    }
+    if (linkedUserId) {
+      const alreadyNewBeliever = await client.query(`SELECT id FROM new_christian_followups WHERE linked_user_id = $1 AND status NOT IN ('GROUP_INTEGRATED', 'COMPLETED') LIMIT 1`, [linkedUserId]);
+      if (alreadyNewBeliever.rowCount) throw fail('This person already has an active new believer record.', 409);
+    } else {
+      const tempPassword = randomBytes(16).toString('base64url');
+      const passwordHash = await bcrypt.hash(tempPassword, 12);
+      const userResult = await client.query(
+        `INSERT INTO users (name, email, phone, password_hash, role, account_status, preferred_language, location, notify_email, email_verified, phone_verified)
+         VALUES ($1, $2, $3, $4, 'MEMBER', 'ACTIVE', $5, $6, $7, $8, FALSE, FALSE) RETURNING id, name, email, phone`,
+        [fullName, email || null, phone || null, passwordHash, preferredLanguage, location, email ? true : false, phone ? true : false]
+      );
+      linkedUserId = Number(userResult.rows[0].id);
+      accountCreated = true;
+      await client.query(`INSERT INTO user_roles (user_id, role_id, assigned_by) SELECT $1, id, $2 FROM roles WHERE code = 'MEMBER' ON CONFLICT DO NOTHING`, [linkedUserId, request.user.id]);
+    }
+    await client.query(
+      `INSERT INTO new_christian_followups (full_name, phone, email, location, preferred_contact_method, preferred_language, accepted_jesus, consent_to_contact, prayer_request, status, registration_status, invitation_email_status, linked_user_id, assigned_to_user_id, followup_worker_user_id, group_integration_status, email_delivery_status, link_secret_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'NEW_BELIEVER', 'REGISTERED', $10, $11, $12, $13, $14, 'PENDING', NOW() + INTERVAL '24 hours') RETURNING id`,
+      [fullName, phone, email, location, email ? 'email' : 'phone', preferredLanguage, true, true, null, linkedUserId, request.user.id, followupWorkerId, groupIntegrationStatus]
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return requestError(error, response);
+  } finally {
+    client.release();
+  }
+  const followupResult = await pool.query(
+    `SELECT f.id FROM new_christian_followups f WHERE f.linked_user_id = $1 ORDER BY f.id DESC LIMIT 1`,
+    [linkedUserId]
+  );
+  let emailDelivery = { status: 'SKIPPED', reason: 'No email address was provided.' };
+  let activationToken = null;
+  if (email && followupResult.rowCount) {
+    const recordId = followupResult.rows[0].id;
+    try {
+      await pool.query(`UPDATE new_christian_followups SET invitation_email_status = 'PENDING' WHERE id = $1`, [recordId]);
+      const userRecord = await findUserById(linkedUserId);
+      if (userRecord && userRecord.password_hash) {
+        activationToken = randomBytes(32).toString('base64url');
+        await storeActivationToken(linkedUserId, activationToken, ACTIVATION_TOKEN_TTL_MINUTES);
+      }
+      const welcome = createNewBelieverWelcomeEmail(fullName, activationToken, config);
+      emailDelivery = await sendEmailNotification({ to: email, ...welcome });
+      await pool.query(`UPDATE new_christian_followups SET invitation_email_status = $1, updated_at = NOW() WHERE id = $2`, [emailDelivery.status === 'DELIVERED' ? 'DELIVERED' : 'FAILED', recordId]);
+      if (emailDelivery.status !== 'DELIVERED') {
+        await pool.query(`UPDATE new_christian_followups SET email_delivery_error = $2 WHERE id = $1`, [recordId, emailDelivery.error || 'Email delivery failed.']);
+      }
+    } catch (error) {
+      console.error('[new-believer] welcome email failed:', error.message);
+      await pool.query(`UPDATE new_christian_followups SET invitation_email_status = 'FAILED', email_delivery_error = $2 WHERE id = $1`, [followupResult.rows[0].id, String(error.message).slice(0, 1000)]);
+      emailDelivery = { status: 'FAILED', error: error.message };
+    }
+  }
+  return response.status(201).json({
+    success: true,
+    message: accountCreated ? 'New believer registered. An invitation has been sent.' : 'Existing account linked to new believer record.',
+    data: {
+      followupId: followupResult.rowCount ? followupResult.rows[0].id : null,
+      fullName, email, phone,
+      registrationStatus: 'REGISTERED',
+      accountCreated,
+      activationToken: accountCreated && email ? activationToken : null,
+      emailDelivery,
+    },
+  });
+}
+
+export async function activateNewBeliever(request, response) {
+  try {
+    const body = request.body ?? {};
+    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    const password = body.password;
+    const confirmPassword = body.confirmPassword;
+
+    if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) throw fail('Invalid activation token.', 400);
+    if (typeof password !== 'string' || password.length < 10 || password.length > 128) {
+      throw fail('Password must be between 10 and 128 characters.', 400);
+    }
+    if (Buffer.byteLength(password, 'utf8') > 72) throw fail('Password must be no more than 72 UTF-8 bytes.', 400);
+    if (confirmPassword !== password) throw fail('Password and confirmation do not match.', 400);
+
+    const tokenHash = activationTokenHash(token);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const tokenRecord = await client.query(
+        `SELECT id, user_id, expires_at FROM temporary_activation_tokens WHERE token_hash = $1 AND purpose = 'NEW_BELIEVER_WELCOME' AND consumed_at IS NULL FOR UPDATE`,
+        [tokenHash]
+      );
+      if (!tokenRecord.rowCount) throw fail('This activation link is invalid, expired, or already used.', 400);
+      if (new Date(tokenRecord.rows[0].expires_at) <= new Date()) throw fail('This activation link has expired. Request a replacement invitation.', 400);
+
+      const userId = Number(tokenRecord.rows[0].user_id);
+      const user = await client.query(`SELECT id, name, email, account_status FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+      if (!user.rowCount) throw fail('Account no longer exists.', 404);
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      await client.query(`UPDATE users SET password_hash = $2, email_verified = TRUE, updated_at = NOW() WHERE id = $1`, [userId, passwordHash]);
+      await client.query(`UPDATE temporary_activation_tokens SET consumed_at = NOW() WHERE id = $1`, [tokenRecord.rows[0].id]);
+      await client.query(`UPDATE new_christian_followups SET registration_status = 'ACCOUNT_ACTIVATED', password_set_at = NOW(), account_activated_at = NOW(), updated_at = NOW() WHERE linked_user_id = $1`, [userId]);
+      await client.query('COMMIT');
+
+      invalidateUserSessions(userId);
+
+      return response.json({
+        success: true,
+        message: 'Your account has been activated. You can now sign in with your new password.',
+        data: { userId: String(userId), name: user.rows[0].name, activated: true },
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    return requestError(error, response);
+  }
+}
+
+export async function createNewBelieverTelegramLink(request, response) {
+  try {
+    if (!request.user || !request.user.permissions.includes('telegram.user.link')) {
+      throw fail('You are not authorized to create Telegram links.', 403);
+    }
+    const followupId = positiveId(request.body?.followupId, 'New believer record');
+    if (!config.telegram.token || !config.telegram.username) throw fail('Telegram linking is not configured. Please contact the church team.', 503);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const record = await client.query(`SELECT id, linked_user_id, telegram_chat_id FROM new_christian_followups WHERE id = $1 FOR UPDATE`, [followupId]);
+      if (!record.rowCount) throw fail('New believer record not found.', 404);
+      if (!record.rows[0].linked_user_id) throw fail('This believer does not have an account to link.', 409);
+      if (record.rows[0].telegram_chat_id) throw fail('Telegram is already connected to this record.', 409);
+
+      const token = randomBytes(32).toString('base64url');
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+
+      await client.query(`UPDATE temporary_activation_tokens SET consumed_at = NOW() WHERE user_id = $2 AND consumed_at IS NULL AND purpose = 'NEW_BELIEVER_TELEGRAM_LINK'`, [followupId, record.rows[0].linked_user_id]);
+      await client.query(`INSERT INTO temporary_activation_tokens(user_id, token_hash, purpose, expires_at) VALUES($1, 'NEW_BELIEVER_TELEGRAM_LINK', NOW() + INTERVAL '10 minutes')`, [record.rows[0].linked_user_id, tokenHash]);
+      await client.query(`UPDATE new_christian_followups SET telegram_link_token_hash = $2, updated_at = NOW() WHERE id = $1`, [followupId, tokenHash]);
+      await client.query('COMMIT');
+
+      return response.status(201).json({
+        success: true,
+        url: `https://t.me/${config.telegram.username}?start=${token}`,
+        expiresInSeconds: 600,
+        message: 'Open the link and press Start in the official church bot to connect your account.',
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    return requestError(error, response);
+  }
+}
+
+export async function verifyNewBelieverTelegramLink(request, response) {
+  try {
+    if (!request.user || !request.user.permissions.includes('telegram.user.link')) {
+      throw fail('You are not authorized to check Telegram link status.', 403);
+    }
+    const followupId = positiveId(request.body?.followupId, 'New believer record');
+    const result = await pool.query(`
+      SELECT f.telegram_chat_id IS NOT NULL AS connected, f.telegram_connected_at,
+             EXISTS (SELECT 1 FROM temporary_activation_tokens t WHERE t.user_id = f.linked_user_id AND t.purpose = 'NEW_BELIEVER_TELEGRAM_LINK' AND t.consumed_at IS NULL AND t.expires_at > NOW()) AS tokenActive
+      FROM new_christian_followups f WHERE f.id = $1
+    `, [followupId]);
+    if (!result.rowCount) throw fail('New believer record not found.', 404);
+    const row = result.rows[0];
+    const status = row.connected ? 'CONNECTED' : row.tokenActive ? 'PENDING' : 'NOT_CONNECTED';
+    return response.json({ success: true, data: { status, connectedAt: row.telegram_connected_at } });
   } catch (error) {
     return requestError(error, response);
   }

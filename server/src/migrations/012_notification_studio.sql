@@ -9,6 +9,30 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
+-- notification_deliveries — idempotent baseline for fresh databases. Older
+-- installations created this table in the legacy platform-core migration.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    template_id BIGINT REFERENCES notification_templates(id) ON DELETE SET NULL,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    telegram_account_id BIGINT REFERENCES telegram_accounts(id) ON DELETE SET NULL,
+    channel VARCHAR(20) NOT NULL CHECK (channel IN ('EMAIL', 'TELEGRAM')),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+        CHECK (status IN ('PENDING', 'SENT', 'FAILED', 'SKIPPED')),
+    provider_message_id VARCHAR(120),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS notification_deliveries_retry_idx
+    ON notification_deliveries(status, created_at)
+    WHERE status IN ('PENDING', 'FAILED');
+
+-- ----------------------------------------------------------------------------
 -- notification_batches — one row per dispatch action (test or live).
 -- Records who acted, the selected audience, channels, and rolled-up counts so
 -- the studio can show dispatch history and prevent accidental duplicate sends.

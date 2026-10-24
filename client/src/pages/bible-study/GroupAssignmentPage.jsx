@@ -10,7 +10,7 @@ import FeatureUnavailable from '../../components/ui/FeatureUnavailable.jsx';
 export default function GroupAssignmentPage() {
   return (
     <div className="stack-lg">
-      <Link to="/me/bible-study" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }}>
+      <Link to="/community" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }}>
         <ArrowLeft size={14} /> Back to groups
       </Link>
       <div className="page-head">

@@ -13,6 +13,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { eventsService } from '../../services/index.js';
 import Alert from '../../components/ui/Alert.jsx';
 import { useToast } from '../../components/feedback/ToastProvider.jsx';
+import ReliableImage from '../../components/ui/ReliableImage.jsx';
 
 export default function EventDetailsPage() {
   const { id } = useParams();
@@ -90,7 +91,7 @@ export default function EventDetailsPage() {
         <div className="grid-2" style={{ gap: '1.5rem', alignItems: 'stretch' }}>
           <div className="card card-elevated">
             {eve?.imageUrl ? (
-              <img src={eve.imageUrl} alt={eve.title || 'Event'} style={{ width: '100%', height: '15rem', objectFit: 'cover', borderRadius: 'var(--r-lg) 0 0 0', display: 'block' }} />
+              <ReliableImage src={eve.imageUrl} alt={eve.title || 'Event'} style={{ width: '100%', height: '15rem', objectFit: 'cover', borderRadius: 'var(--r-lg) 0 0 0', display: 'block' }} />
             ) : null}
           </div>
           <div className="card card-elevated" style={{ padding: '1.5rem' }}>
@@ -132,7 +133,7 @@ export default function EventDetailsPage() {
               {eve?.requiresRegistration && isUpcoming ? (user
                 ? <Button onClick={register} loading={registering}>Register for this event</Button>
                 : <Button to="/login">Sign in to register</Button>) : null}
-              {isUpcoming ? <Button to="/events" iconRight={ArrowRight}>View all events</Button> : null}
+              {isUpcoming ? <Button to="/programs" iconRight={ArrowRight}>View all programs</Button> : null}
             </div>
             {registrationMessage ? <Alert variant={registrationMessage.includes('registered') ? 'success' : 'danger'}>{registrationMessage}</Alert> : null}
           </div>
@@ -155,10 +156,9 @@ function UpcomingStrip({ limit = 4, label = "What\u2019s Next" }) {
     <section className="section-sm section-paper" style={{ paddingTop: '1.2rem' }}>
       <div className="row-between" style={{ marginBottom: '0.6rem' }}>
         <span className="eyebrow blue"><span className="dot" /> {label}</span>
-        <Button variant="ghost" iconRight={ArrowRight} to="/events">More events</Button>
+        <Button variant="ghost" iconRight={ArrowRight} to="/programs">More programs</Button>
       </div>
       <div className="event-grid">{events.data.slice(0, 4).map((e) => <EventCard key={e.id ?? e.title} event={e} />)}</div>
     </section>
   );
 }
-

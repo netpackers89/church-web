@@ -2,9 +2,68 @@ import { pool } from '../config/db.js';
 import { audit, clientIp } from '../services/auditService.js';
 import { pageParams, paged, requestError, requiredString } from '../utils/http.js';
 import { assertRoleAssignmentAllowed, normaliseRoleCodes, primaryRole, SYSTEM_OWNER } from '../services/roleAssignmentPolicy.js';
-import { sendTelegramNotification } from '../services/telegramService.js';
-import { sendEmailNotification } from '../services/emailService.js';
+import { sendTelegramNotification } from '../telegram/services/messaging.js';
+import { sendEmailNotification } from '../email/index.js';
 import { validateAudience, renderEmailHtml } from '../services/notificationStudioService.js';
+
+// The settings endpoint is intentionally an allow-list.  System settings can
+// also contain integration credentials, which must never be returned to a
+// browser or accepted through this general-purpose administration form.
+const TEXT_SETTING_LIMITS = Object.freeze({
+	churchName: 160, logoUrl: 2000, faviconUrl: 2000, contactEmail: 320,
+	contactPhone: 40, address: 500, mapUrl: 2000, serviceTimes: 500,
+	socialFacebook: 2000, socialInstagram: 2000, socialYoutube: 2000,
+	bankName: 160, accountHolder: 160, accountNumber: 120, bankBranch: 160,
+	transferInstructions: 1000, currency: 8,
+});
+const SELECT_SETTING_VALUES = Object.freeze({
+	publicSiteStatus: ['LIVE', 'MAINTENANCE'],
+	defaultTheme: ['SYSTEM', 'LIGHT', 'DARK'],
+	defaultLanguage: ['en', 'am'],
+	calendarSystem: ['ETHIOPIAN', 'GREGORIAN'],
+});
+const SAFE_SETTING_KEYS = Object.freeze([
+	...Object.keys(TEXT_SETTING_LIMITS), ...Object.keys(SELECT_SETTING_VALUES),
+	'paymentMethods', 'bank_account',
+]);
+const URL_SETTING_KEYS = new Set(['logoUrl', 'faviconUrl', 'mapUrl', 'socialFacebook', 'socialInstagram', 'socialYoutube']);
+
+function validateSettingsPayload(body) {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) {
+		throw Object.assign(new Error('Provide one or more valid settings.'), { status: 400 });
+	}
+	const entries = Object.entries(body);
+	if (!entries.length || entries.some(([key]) => !SAFE_SETTING_KEYS.includes(key))) {
+		throw Object.assign(new Error('One or more settings cannot be changed here.'), { status: 400 });
+	}
+	for (const [key, value] of entries) {
+		if (key in TEXT_SETTING_LIMITS && (typeof value !== 'string' || value.length > TEXT_SETTING_LIMITS[key])) {
+			throw Object.assign(new Error(`${key} must be a valid text value.`), { status: 400 });
+		}
+		if (key === 'churchName' && !value.trim()) {
+			throw Object.assign(new Error('churchName is required.'), { status: 400 });
+		}
+		if (key === 'contactEmail' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+			throw Object.assign(new Error('contactEmail must be a valid email address.'), { status: 400 });
+		}
+		if (URL_SETTING_KEYS.has(key) && value) {
+			try { new URL(value); } catch { throw Object.assign(new Error(`${key} must be a valid URL.`), { status: 400 }); }
+		}
+		if (key in SELECT_SETTING_VALUES && !SELECT_SETTING_VALUES[key].includes(value)) {
+			throw Object.assign(new Error(`${key} has an invalid value.`), { status: 400 });
+		}
+		if (key === 'paymentMethods' && (!Array.isArray(value) || value.length > 20)) {
+			throw Object.assign(new Error('paymentMethods must be a list of at most 20 payment methods.'), { status: 400 });
+		}
+		if (key === 'paymentMethods' && value.some((method) => !method || typeof method !== 'object' || Array.isArray(method) || typeof method.name !== 'string' || method.name.length > 160 || !['BANK', 'TELEBIRR', 'OTHER'].includes(method.type))) {
+			throw Object.assign(new Error('Each payment method must include a valid name and type.'), { status: 400 });
+		}
+		if (key === 'bank_account' && (!value || typeof value !== 'object' || Array.isArray(value))) {
+			throw Object.assign(new Error('bank_account must be a valid account object.'), { status: 400 });
+		}
+	}
+	return entries;
+}
 
 export async function roles(_request, response) {
 	try {
@@ -27,7 +86,7 @@ export async function setUserRoles(request, response) {
 		const currentRoles = await client.query(`SELECT r.id, r.code FROM user_roles ur
 			JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = $1 FOR UPDATE`, [request.params.userId]);
 		const oldCodes = currentRoles.rows.map((role) => role.code);
-		assertRoleAssignmentAllowed({ actorRoles: request.user.roles, targetRoles: oldCodes, nextRoles: codes, actorId: request.user.id, targetUserId: request.params.userId });
+		assertRoleAssignmentAllowed({ actorRoles: request.user.roles, actorPermissions: request.user.permissions, targetRoles: oldCodes, nextRoles: codes, actorId: request.user.id, targetUserId: request.params.userId });
 		const matched = await client.query('SELECT id,code FROM roles WHERE code = ANY($1::varchar[])', [codes]);
 		if (matched.rowCount !== codes.length) throw Object.assign(new Error('One or more roles do not exist.'), { status: 400 });
 		if (oldCodes.includes(SYSTEM_OWNER) && !codes.includes(SYSTEM_OWNER)) {
@@ -65,7 +124,7 @@ export async function updateUserStatus(request, response) {
 	try {
 		const status = request.body?.status;
 		if (!['ACTIVE', 'DEACTIVATED'].includes(status)) throw Object.assign(new Error('status must be ACTIVE or DEACTIVATED.'), { status: 400 });
-		if (String(request.params.userId) === request.user.id && status !== 'ACTIVE') throw Object.assign(new Error('You cannot suspend your own account.'), { status: 400 });
+		if (String(request.params.userId) === String(request.user.id) && status !== 'ACTIVE') throw Object.assign(new Error('You cannot suspend your own account.'), { status: 400 });
 		await client.query('BEGIN');
 		const target = await client.query('SELECT id, account_status FROM users WHERE id=$1 FOR UPDATE', [request.params.userId]);
 		if (!target.rowCount) { await client.query('ROLLBACK'); return response.status(404).json({ error: 'User not found.' }); }
@@ -91,7 +150,10 @@ export async function updateUserStatus(request, response) {
 }
 
 export async function settings(_request, response) {
-	try { const result = await pool.query('SELECT key,value,is_public AS "isPublic",updated_at AS "updatedAt" FROM system_settings ORDER BY key'); return response.json({ success: true, data: Object.fromEntries(result.rows.map((row) => [row.key, row.value])) }); } catch (error) { return requestError(error, response); }
+	try {
+		const result = await pool.query('SELECT key,value FROM system_settings WHERE key = ANY($1::varchar[]) ORDER BY key', [SAFE_SETTING_KEYS]);
+		return response.json({ success: true, data: Object.fromEntries(result.rows.map((row) => [row.key, row.value])) });
+	} catch (error) { return requestError(error, response); }
 }
 
 export async function listGivingRecords(_request, response) {
@@ -134,16 +196,25 @@ export async function reviewGivingRecord(request, response) {
 }
 
 export async function updateSettings(request, response) {
-	const client = await pool.connect();
+	let client;
 	try {
-		const entries = Object.entries(request.body ?? {});
-		if (!entries.length || entries.some(([key]) => !/^[a-z][a-z0-9_.-]{1,98}$/i.test(key))) throw Object.assign(new Error('Provide one or more valid setting keys.'), { status: 400 });
+		const entries = validateSettingsPayload(request.body);
+		client = await pool.connect();
 		await client.query('BEGIN');
-		for (const [key, value] of entries) await client.query(`INSERT INTO system_settings(key,value,updated_by,updated_at) VALUES($1,$2::jsonb,$3,NOW()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_by=EXCLUDED.updated_by,updated_at=NOW()`, [key, JSON.stringify(value), request.user.id]);
+		for (const [key, value] of entries) await client.query(
+			`INSERT INTO system_settings(key,value) VALUES($1,$2::jsonb)
+			 ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`,
+			[key, JSON.stringify(value)],
+		);
+		await audit({ actorUserId: request.user.id, action: 'SETTINGS_UPDATED', entityType: 'system_settings', after: Object.fromEntries(entries), ipAddress: clientIp(request) }, client);
 		await client.query('COMMIT');
-		await audit({ actorUserId: request.user.id, action: 'SETTINGS_UPDATED', entityType: 'system_settings', after: Object.fromEntries(entries), ipAddress: clientIp(request) });
 		return response.json({ success: true, message: 'Settings updated.' });
-	} catch (error) { await client.query('ROLLBACK'); return requestError(error, response); } finally { client.release(); }
+	} catch (error) {
+		if (client) await client.query('ROLLBACK').catch(() => {});
+		return requestError(error, response);
+	} finally {
+		client?.release();
+	}
 }
 
 export async function publishVerse(request, response) {
@@ -160,12 +231,13 @@ export async function publishVerse(request, response) {
 		await client.query('BEGIN');
 		const exactVerse = await client.query(`SELECT id FROM bible_verses WHERE book=$1 AND chapter=$2 AND verse_start=$3 AND COALESCE(verse_end,verse_start)=COALESCE($4,$3) AND translation=$5 AND language=$6 FOR UPDATE`, [book.trim(), Number(chapter), Number(verseStart), verseEnd ? Number(verseEnd) : null, translation.trim(), body.language || 'en']);
 		const verse = exactVerse.rowCount
-			? await client.query(`UPDATE bible_verses SET verse_text=$2,source_attribution=$3,verified_at=NOW(),verified_by=$4 WHERE id=$1 RETURNING id`, [exactVerse.rows[0].id, text, requiredString(body.sourceAttribution || 'Administrator verified import', 'Source attribution', 500), request.user.id])
-			: await client.query(`INSERT INTO bible_verses (book,chapter,verse_start,verse_end,verse_text,translation,language,source_attribution,verified_at,verified_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9) RETURNING id`, [book.trim(), Number(chapter), Number(verseStart), verseEnd ? Number(verseEnd) : null, text, translation.trim(), body.language || 'en', requiredString(body.sourceAttribution || 'Administrator verified import', 'Source attribution', 500), request.user.id]);
+			? await client.query(`UPDATE bible_verses SET verse_text=$2,source_attribution=$3,verified_at=NOW(),verified_by=$4,updated_at=NOW() WHERE id=$1 RETURNING id`, [exactVerse.rows[0].id, text, requiredString(body.sourceAttribution || 'Administrator verified import', 'Source attribution', 500), request.user.id])
+			: await client.query(`INSERT INTO bible_verses (book,chapter,verse_start,verse_end,verse_text,translation,language,source_attribution,verified_at,verified_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,NOW()) RETURNING id`, [book.trim(), Number(chapter), Number(verseStart), verseEnd ? Number(verseEnd) : null, text, translation.trim(), body.language || 'en', requiredString(body.sourceAttribution || 'Administrator verified import', 'Source attribution', 500), request.user.id]);
 		await client.query(`UPDATE daily_verse_publications SET status='UNPUBLISHED',updated_at=NOW() WHERE publication_date=$1 AND status IN ('SCHEDULED','PUBLISHED')`, [publicationDate]);
 		const publicationStatus = ['SCHEDULED','PUBLISHED','UNPUBLISHED'].includes(body.status) ? body.status : (body.schedule ? 'SCHEDULED' : 'PUBLISHED');
+		const publishedAt = publicationStatus === 'PUBLISHED' ? new Date() : null;
 		const published = await client.query(`INSERT INTO daily_verse_publications (verse_id,publication_date,reflection,explanation,publication_source,status,publish_to_website,publish_to_telegram,background_image_url,published_by,published_at)
-			VALUES($1,$2,$3,$4,'MANUAL',$5,$6,$7,$8,$9,CASE WHEN $5='PUBLISHED' THEN NOW() END) RETURNING id`, [verse.rows[0].id, publicationDate, body.reflection || null, body.explanation || null, publicationStatus, body.publishToWebsite !== false, Boolean(body.publishToTelegram), typeof body.backgroundImageUrl === 'string' ? body.backgroundImageUrl.slice(0, 2000) : null, request.user.id]);
+			VALUES($1,$2,$3,$4,'MANUAL',$5,$6,$7,$8,$9,$10) RETURNING id`, [verse.rows[0].id, publicationDate, body.reflection || null, body.explanation || null, publicationStatus, body.publishToWebsite !== false, Boolean(body.publishToTelegram), typeof body.backgroundImageUrl === 'string' ? body.backgroundImageUrl.slice(0, 2000) : null, request.user.id, publishedAt]);
 		await client.query(`INSERT INTO bible_verse_publication_history(publication_id,action,snapshot,changed_by) VALUES($1,'MANUAL_PUBLISHED',$2::jsonb,$3)`, [published.rows[0].id, JSON.stringify({ reference, publicationDate }), request.user.id]);
 		await client.query('COMMIT');
 		await audit({ actorUserId: request.user.id, action: 'VERSE_PUBLISHED', entityType: 'daily_verse_publication', entityId: published.rows[0].id, ipAddress: clientIp(request) });
@@ -185,7 +257,8 @@ export async function updateVersePublication(request, response) {
 	try {
 		const body = request.body ?? {}; const status = body.status;
 		if (status !== undefined && !['SCHEDULED','PUBLISHED','UNPUBLISHED','CANCELLED'].includes(status)) throw Object.assign(new Error('Invalid verse publication status.'), { status: 400 });
-		const result = await pool.query(`UPDATE daily_verse_publications SET status=COALESCE($2,status),publish_to_website=COALESCE($3,publish_to_website),reflection=COALESCE($4,reflection),explanation=COALESCE($5,explanation),background_image_url=COALESCE($6,background_image_url),published_at=CASE WHEN COALESCE($2,status)='PUBLISHED' THEN COALESCE(published_at,NOW()) ELSE published_at END,updated_at=NOW() WHERE id=$1 RETURNING id,status`, [request.params.id,status,typeof body.publishToWebsite === 'boolean' ? body.publishToWebsite : null,typeof body.reflection === 'string' ? body.reflection : null,typeof body.explanation === 'string' ? body.explanation : null,typeof body.backgroundImageUrl === 'string' ? body.backgroundImageUrl.slice(0,2000) : null]);
+		const publishedAt = status === 'PUBLISHED' ? new Date() : null;
+		const result = await pool.query(`UPDATE daily_verse_publications SET status=COALESCE($2,status),publish_to_website=COALESCE($3,publish_to_website),reflection=COALESCE($4,reflection),explanation=COALESCE($5,explanation),background_image_url=COALESCE($6,background_image_url),published_at=COALESCE($7,published_at),updated_at=NOW() WHERE id=$1 RETURNING id,status`, [request.params.id,status,typeof body.publishToWebsite === 'boolean' ? body.publishToWebsite : null,typeof body.reflection === 'string' ? body.reflection : null,typeof body.explanation === 'string' ? body.explanation : null,typeof body.backgroundImageUrl === 'string' ? body.backgroundImageUrl.slice(0,2000) : null, publishedAt]);
 		if (!result.rowCount) return response.status(404).json({ error: 'Verse publication was not found.' });
 		await audit({ actorUserId: request.user.id, action: 'VERSE_PUBLICATION_UPDATED', entityType: 'daily_verse_publication', entityId: request.params.id, after: result.rows[0], ipAddress: clientIp(request) });
 		return response.json({ success: true, data: result.rows[0] });
@@ -202,10 +275,48 @@ export async function createAnnouncement(request, response) {
 		const body = requiredString(request.body?.body, 'Body', 10000);
 		const status = request.body?.status === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT';
 		const imageUrl = typeof request.body?.imageUrl === 'string' && request.body.imageUrl.trim() ? request.body.imageUrl.trim() : null;
-		if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
-			throw Object.assign(new Error('Announcement image URL must be an HTTPS URL.'), { status: 400 });
+		if (imageUrl && !/^https?:\/\//i.test(imageUrl) && !imageUrl.startsWith('/')) {
+			throw Object.assign(new Error('Announcement image URL must be a valid URL.'), { status: 400 });
 		}
-		const result = await pool.query(`INSERT INTO announcements(title,body,status,image_url,published_at,created_by) VALUES($1,$2,$3,$4,CASE WHEN $3='PUBLISHED' THEN NOW() END,$5) RETURNING id,title,body,status,image_url AS "imageUrl",published_at AS "publishedAt"`, [title, body, status, imageUrl, request.user.id]);
+		const departmentId = request.body?.departmentId ? Number(request.body.departmentId) : null;
+		const organizationId = request.body?.organizationId ? Number(request.body.organizationId) : null;
+		const bibleStudyGroupId = request.body?.bibleStudyGroupId ? Number(request.body.bibleStudyGroupId) : null;
+		const eventId = request.body?.eventId ? Number(request.body.eventId) : null;
+		const programId = request.body?.programId ? Number(request.body.programId) : null;
+		const featured = Boolean(request.body?.featured);
+		const targetAudience = typeof request.body?.targetAudience === 'string' ? request.body.targetAudience.trim().toUpperCase() : (departmentId ? 'DEPARTMENT' : organizationId ? 'ORGANIZATION' : bibleStudyGroupId ? 'BIBLE_STUDY' : 'CHURCH');
+		const deliveryChannels = Array.isArray(request.body?.deliveryChannels) ? request.body.deliveryChannels : ['WEBSITE'];
+
+		// Verify permission: global admin or leader of the targeted group
+		const hasGlobalManage = (request.user?.permissions ?? []).includes('announcements.manage') || (request.user?.permissions ?? []).includes('system.owner.manage');
+		if (!hasGlobalManage) {
+			let isLeader = false;
+			if (departmentId) {
+				const check = await pool.query('SELECT 1 FROM departments WHERE id = $1 AND leader_user_id = $2 AND deleted_at IS NULL', [departmentId, request.user.id]);
+				if (check.rowCount) isLeader = true;
+			}
+			if (bibleStudyGroupId && !isLeader) {
+				const check = await pool.query('SELECT 1 FROM bible_study_groups WHERE id = $1 AND leader_user_id = $2 AND deleted_at IS NULL', [bibleStudyGroupId, request.user.id]);
+				if (check.rowCount) isLeader = true;
+			}
+			if (organizationId && !isLeader) {
+				const check = await pool.query('SELECT 1 FROM organizations WHERE id = $1 AND leader_user_id = $2 AND deleted_at IS NULL', [organizationId, request.user.id]);
+				if (check.rowCount) isLeader = true;
+			}
+			if (!isLeader) {
+				throw Object.assign(new Error('You do not have permission to publish announcements for this group.'), { status: 403 });
+			}
+		}
+
+		const publishedAt = status === 'PUBLISHED' ? new Date() : null;
+		const result = await pool.query(
+			`INSERT INTO announcements(title, body, status, image_url, published_at, created_by, department_id, organization_id, bible_study_group_id, event_id, program_id, featured, target_audience, delivery_channels)
+			 VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
+			 RETURNING id, title, body, status, image_url AS "imageUrl", published_at AS "publishedAt", created_by AS "createdBy",
+			 department_id AS "departmentId", organization_id AS "organizationId", bible_study_group_id AS "bibleStudyGroupId",
+			 event_id AS "eventId", program_id AS "programId", featured, target_audience AS "targetAudience", delivery_channels AS "deliveryChannels"`,
+			[title, body, status, imageUrl, publishedAt, request.user.id, departmentId, organizationId, bibleStudyGroupId, eventId, programId, featured, targetAudience, JSON.stringify(deliveryChannels)]
+		);
 		await audit({ actorUserId: request.user.id, action: 'ANNOUNCEMENT_CREATED', entityType: 'announcement', entityId: result.rows[0].id, after: result.rows[0], ipAddress: clientIp(request) });
 		return response.status(201).json({ success: true, data: result.rows[0] });
 	} catch (error) { return requestError(error, response); }
@@ -214,13 +325,38 @@ export async function createAnnouncement(request, response) {
 export async function listAnnouncements(request, response) {
   try {
     const { page, limit, offset } = pageParams(request.query);
+    const departmentId = request.query.departmentId ? Number(request.query.departmentId) : null;
+    const organizationId = request.query.organizationId ? Number(request.query.organizationId) : null;
+    const bibleStudyGroupId = request.query.bibleStudyGroupId ? Number(request.query.bibleStudyGroupId) : null;
+
+    let whereClause = 'WHERE a.deleted_at IS NULL';
+    const params = [limit, offset];
+    let paramIndex = 3;
+
+    if (departmentId) {
+      whereClause += ` AND a.department_id = $${paramIndex++}`;
+      params.push(departmentId);
+    } else if (organizationId) {
+      whereClause += ` AND a.organization_id = $${paramIndex++}`;
+      params.push(organizationId);
+    } else if (bibleStudyGroupId) {
+      whereClause += ` AND a.bible_study_group_id = $${paramIndex++}`;
+      params.push(bibleStudyGroupId);
+    }
+
     const result = await pool.query(
-      `SELECT id, title, body, status, image_url AS "imageUrl", published_at AS "publishedAt", created_by AS "createdBy"
-       FROM announcements
-       WHERE deleted_at IS NULL
-       ORDER BY CASE WHEN status = 'PUBLISHED' THEN 0 ELSE 1 END, published_at DESC NULLS LAST, id DESC
+      `SELECT a.id, a.title, a.body, a.status, a.image_url AS "imageUrl", a.published_at AS "publishedAt", a.created_by AS "createdBy",
+       a.department_id AS "departmentId", a.organization_id AS "organizationId", a.bible_study_group_id AS "bibleStudyGroupId",
+       a.event_id AS "eventId", a.program_id AS "programId", a.featured, a.target_audience AS "targetAudience", a.delivery_channels AS "deliveryChannels",
+       d.name AS "departmentName", g.name AS "groupName", o.name AS "organizationName"
+       FROM announcements a
+       LEFT JOIN departments d ON d.id = a.department_id
+       LEFT JOIN bible_study_groups g ON g.id = a.bible_study_group_id
+       LEFT JOIN organizations o ON o.id = a.organization_id
+       ${whereClause}
+       ORDER BY CASE WHEN a.status = 'PUBLISHED' THEN 0 ELSE 1 END, a.published_at DESC NULLS LAST, a.id DESC
        LIMIT $1 OFFSET $2`,
-      [limit, offset],
+      params,
     );
     return response.json({ success: true, data: result.rows });
   } catch (error) { return requestError(error, response); }
@@ -228,19 +364,32 @@ export async function listAnnouncements(request, response) {
 
 export async function updateAnnouncement(request, response) {
 	try {
-		const existing = await pool.query('SELECT id,title,body,status,image_url AS "imageUrl" FROM announcements WHERE id=$1 AND deleted_at IS NULL', [request.params.id]);
+		const existing = await pool.query('SELECT * FROM announcements WHERE id=$1 AND deleted_at IS NULL', [request.params.id]);
 		if (!existing.rowCount) return response.status(404).json({ error: 'Announcement was not found.' });
 		const data = { ...existing.rows[0], ...(request.body ?? {}) };
 		const title = requiredString(data.title, 'Title', 200);
 		const body = requiredString(data.body, 'Body', 10000);
 		const status = String(data.status || 'DRAFT').toUpperCase();
 		if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) throw Object.assign(new Error('Status must be DRAFT, PUBLISHED, or ARCHIVED.'), { status: 400 });
-		const imageUrl = typeof data.imageUrl === 'string' && data.imageUrl.trim() ? data.imageUrl.trim() : null;
-		if (imageUrl && !/^https:\/\//i.test(imageUrl)) throw Object.assign(new Error('Announcement image URL must be an HTTPS URL.'), { status: 400 });
-		const result = await pool.query(`UPDATE announcements SET title=$2,body=$3,status=$4,image_url=$5,
-			published_at=CASE WHEN $4='PUBLISHED' THEN COALESCE(published_at,NOW()) ELSE NULL END,updated_at=NOW()
-			WHERE id=$1 RETURNING id,title,body,status,image_url AS "imageUrl",published_at AS "publishedAt"`,
-		[request.params.id, title, body, status, imageUrl]);
+		const imageUrl = typeof data.imageUrl === 'string' && data.imageUrl.trim() ? data.imageUrl.trim() : (typeof data.image_url === 'string' ? data.image_url.trim() : null);
+		if (imageUrl && !/^https?:\/\//i.test(imageUrl) && !imageUrl.startsWith('/')) throw Object.assign(new Error('Announcement image URL must be a valid URL.'), { status: 400 });
+
+		const publishedAt = status === 'PUBLISHED' ? (existing.rows[0].published_at || new Date()) : null;
+		const departmentId = request.body?.departmentId !== undefined ? (request.body.departmentId ? Number(request.body.departmentId) : null) : existing.rows[0].department_id;
+		const organizationId = request.body?.organizationId !== undefined ? (request.body.organizationId ? Number(request.body.organizationId) : null) : existing.rows[0].organization_id;
+		const bibleStudyGroupId = request.body?.bibleStudyGroupId !== undefined ? (request.body.bibleStudyGroupId ? Number(request.body.bibleStudyGroupId) : null) : existing.rows[0].bible_study_group_id;
+		const eventId = request.body?.eventId !== undefined ? (request.body.eventId ? Number(request.body.eventId) : null) : existing.rows[0].event_id;
+		const programId = request.body?.programId !== undefined ? (request.body.programId ? Number(request.body.programId) : null) : existing.rows[0].program_id;
+		const featured = request.body?.featured !== undefined ? Boolean(request.body.featured) : existing.rows[0].featured;
+		const targetAudience = request.body?.targetAudience || existing.rows[0].target_audience || 'CHURCH';
+		const deliveryChannels = request.body?.deliveryChannels || existing.rows[0].delivery_channels || ['WEBSITE'];
+
+		const result = await pool.query(`UPDATE announcements SET title=$2,body=$3,status=$4,image_url=$5,published_at=$6,updated_at=NOW(),
+			department_id=$7,organization_id=$8,bible_study_group_id=$9,event_id=$10,program_id=$11,featured=$12,target_audience=$13,delivery_channels=$14::jsonb
+			WHERE id=$1 RETURNING id,title,body,status,image_url AS "imageUrl",published_at AS "publishedAt",
+			department_id AS "departmentId",organization_id AS "organizationId",bible_study_group_id AS "bibleStudyGroupId",
+			event_id AS "eventId",program_id AS "programId",featured,target_audience AS "targetAudience",delivery_channels AS "deliveryChannels"`,
+		[request.params.id, title, body, status, imageUrl, publishedAt, departmentId, organizationId, bibleStudyGroupId, eventId, programId, featured, targetAudience, JSON.stringify(deliveryChannels)]);
 		await audit({ actorUserId: request.user.id, action: 'ANNOUNCEMENT_UPDATED', entityType: 'announcement', entityId: request.params.id, before: existing.rows[0], after: result.rows[0], ipAddress: clientIp(request) });
 		return response.json({ success: true, data: result.rows[0] });
 	} catch (error) { return requestError(error, response); }
@@ -267,17 +416,77 @@ export async function report(request, response) {
 export async function telegramInbox(request, response) {
 	try {
 		const { page, limit, offset } = pageParams(request.query);
-		const status = request.query.status;
-		const values = status ? [status, limit, offset] : [limit, offset];
-		const where = status ? 'WHERE m.status=$1' : '';
-		const [rows, total] = await Promise.all([
-			pool.query(`SELECT m.id,m.content,m.content_type AS "contentType",m.received_at AS "receivedAt",m.status,ta.username AS "telegramUsername",ta.display_name AS "telegramDisplayName",u.id AS "linkedUserId",u.name AS "linkedUserName",h.name AS "handledByName",
-				COALESCE((SELECT json_agg(json_build_object('id',r.id,'replyText',r.reply_text,'status',r.status,'error',r.error_detail,'sentBy',su.name,'createdAt',r.created_at,'deliveredAt',r.delivered_at) ORDER BY r.created_at) FROM telegram_message_replies r LEFT JOIN users su ON su.id=r.sent_by WHERE r.telegram_message_id=m.id),'[]') AS replies
-				FROM telegram_messages m LEFT JOIN LATERAL (SELECT account.id,account.username,account.display_name,account.user_id FROM telegram_accounts account WHERE account.chat_id=m.chat_id ORDER BY account.updated_at DESC LIMIT 1) ta ON TRUE LEFT JOIN users u ON u.id=ta.user_id LEFT JOIN users h ON h.id=m.handled_by ${where} ORDER BY m.received_at DESC LIMIT $${status ? 2 : 1} OFFSET $${status ? 3 : 2}`, values),
-			pool.query(`SELECT count(*)::int AS total FROM telegram_messages m ${where}`, status ? [status] : []),
+		const canViewSensitive = actorPermissions(request).has('prayer_requests.view');
+		const values = [canViewSensitive];
+		const conditions = ["m.status NOT IN ('DRAFT','CANCELLED')", '(NOT c.is_sensitive OR $1::boolean)'];
+		const addFilter = (value, expression) => {
+			if (typeof value !== 'string' || !value.trim()) return;
+			values.push(value.trim());
+			conditions.push(expression(values.length));
+		};
+		const statusFilter = request.query.status;
+		if (statusFilter && !['NEW','IN_REVIEW','IN_PROGRESS','ASSIGNED','AWAITING_RESPONSE','REPLIED','RESOLVED','CLOSED'].includes(statusFilter)) throw Object.assign(new Error('Select a valid inbox status.'), { status: 400 });
+		const priorityFilter = request.query.priority;
+		if (priorityFilter && !['LOW','NORMAL','HIGH','URGENT'].includes(priorityFilter)) throw Object.assign(new Error('Select a valid priority.'), { status: 400 });
+		const channelFilter = request.query.channel;
+		if (channelFilter && !['TELEGRAM','EMAIL','WEBSITE'].includes(channelFilter)) throw Object.assign(new Error('Select a valid submission channel.'), { status: 400 });
+		for (const dateValue of [request.query.from, request.query.to]) {
+			if (dateValue && !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) throw Object.assign(new Error('Use valid ISO dates for the date filters.'), { status: 400 });
+		}
+		if (statusFilter === 'IN_REVIEW') conditions.push("m.status IN ('IN_REVIEW','IN_PROGRESS')");
+		else addFilter(statusFilter, (index) => `m.status=$${index}`);
+		addFilter(request.query.category, (index) => `m.category_code=$${index}`);
+		addFilter(request.query.priority, (index) => `m.priority=$${index}`);
+		addFilter(request.query.assignedTo, (index) => `m.assigned_to=$${index}`);
+		addFilter(request.query.channel, (index) => `m.source_channel=$${index}`);
+		addFilter(request.query.from, (index) => `m.received_at >= $${index}::date`);
+		addFilter(request.query.to, (index) => `m.received_at < ($${index}::date + INTERVAL '1 day')`);
+		addFilter(request.query.search, (index) => `(m.content ILIKE $${index} OR m.reference_code ILIKE $${index} OR (NOT m.is_anonymous AND (ta.display_name ILIKE $${index} OR ta.username ILIKE $${index})))`);
+		const where = `WHERE ${conditions.join(' AND ')}`;
+		const listValues = [...values, limit, offset];
+		const [rows, total, categories, counts, assignees] = await Promise.all([
+			pool.query(`SELECT m.id,m.reference_code AS "referenceCode",m.content,m.content_type AS "contentType",
+				m.received_at AS "receivedAt",m.status,m.category_code AS "categoryCode",c.label AS category,c.is_sensitive AS "isSensitive",
+				m.priority,m.assigned_to AS "assignedTo",assignee.name AS "assignedToName",m.source_channel AS "sourceChannel",
+				m.is_anonymous AS "isAnonymous",
+				CASE WHEN m.is_anonymous THEN NULL ELSE ta.username END AS "telegramUsername",
+				CASE WHEN m.is_anonymous THEN NULL ELSE ta.display_name END AS "telegramDisplayName",
+				CASE WHEN m.is_anonymous THEN NULL ELSE u.id END AS "linkedUserId",
+				CASE WHEN m.is_anonymous THEN NULL ELSE u.name END AS "linkedUserName",
+				CASE WHEN m.is_anonymous THEN NULL ELSE h.name END AS "handledByName",
+				COALESCE((SELECT json_agg(json_build_object('id',r.id,'replyText',r.reply_text,'status',r.status,'error',r.error_detail,'sentBy',su.name,'createdAt',r.created_at,'deliveredAt',r.delivered_at) ORDER BY r.created_at) FROM telegram_message_replies r LEFT JOIN users su ON su.id=r.sent_by WHERE r.telegram_message_id=m.id),'[]') AS replies,
+				COALESCE((SELECT json_agg(json_build_object('id',n.id,'note',n.note,'createdAt',n.created_at,'createdBy',nu.name) ORDER BY n.created_at) FROM telegram_message_notes n LEFT JOIN users nu ON nu.id=n.created_by WHERE n.telegram_message_id=m.id),'[]') AS notes,
+				COALESCE((SELECT json_agg(json_build_object('oldStatus',sh.old_status,'newStatus',sh.new_status,'createdAt',sh.created_at,'changedBy',hu.name) ORDER BY sh.created_at) FROM telegram_message_status_history sh LEFT JOIN users hu ON hu.id=sh.changed_by WHERE sh.telegram_message_id=m.id),'[]') AS "statusHistory"
+				FROM telegram_messages m JOIN telegram_inbox_categories c ON c.code=m.category_code
+				LEFT JOIN LATERAL (SELECT account.id,account.username,account.display_name,account.user_id FROM telegram_accounts account WHERE account.chat_id=m.chat_id ORDER BY account.updated_at DESC LIMIT 1) ta ON TRUE
+				LEFT JOIN users u ON u.id=ta.user_id LEFT JOIN users h ON h.id=m.handled_by
+				LEFT JOIN users assignee ON assignee.id=m.assigned_to ${where}
+				ORDER BY m.received_at DESC LIMIT $${listValues.length - 1} OFFSET $${listValues.length}`, listValues),
+			pool.query(`SELECT count(DISTINCT m.id)::int AS total FROM telegram_messages m JOIN telegram_inbox_categories c ON c.code=m.category_code LEFT JOIN telegram_accounts ta ON ta.chat_id=m.chat_id ${where}`, values),
+			pool.query(`SELECT code,label,is_sensitive AS "isSensitive" FROM telegram_inbox_categories ORDER BY sort_order,code`),
+			pool.query(`SELECT m.status,count(*)::int AS count FROM telegram_messages m JOIN telegram_inbox_categories c ON c.code=m.category_code
+				WHERE m.status NOT IN ('DRAFT','CANCELLED') AND (NOT c.is_sensitive OR $1::boolean) GROUP BY m.status`, [canViewSensitive]),
+			pool.query(`SELECT DISTINCT u.id,u.name FROM users u
+				JOIN user_roles ur ON ur.user_id=u.id
+				JOIN role_permissions rp ON rp.role_id=ur.role_id
+				JOIN permissions p ON p.id=rp.permission_id
+				WHERE u.account_status='ACTIVE' AND p.code IN ('telegram.manage','prayer_requests.respond')
+				ORDER BY u.name`),
 		]);
-		return paged(response, rows.rows, { page, limit }, total.rows[0].total);
+		const totalCount = total.rows[0].total;
+		return response.json({ success: true, data: rows.rows, categories: categories.rows, assignees: assignees.rows,
+			counts: Object.fromEntries(counts.rows.map((row) => [row.status, row.count])),
+			meta: { page, limit, total: totalCount, pages: Math.ceil(totalCount / limit) } });
 	} catch (error) { return requestError(error, response); }
+}
+
+async function assertTelegramMessageAccess(request, messageId) {
+	const result = await pool.query(`SELECT c.is_sensitive AS "isSensitive" FROM telegram_messages m
+		JOIN telegram_inbox_categories c ON c.code=m.category_code WHERE m.id=$1`, [messageId]);
+	if (!result.rowCount) throw Object.assign(new Error('Telegram message was not found.'), { status: 404 });
+	if (result.rows[0].isSensitive && !actorPermissions(request).has('prayer_requests.view')) {
+		throw Object.assign(new Error('Prayer-request permission is required to access this message.'), { status: 403 });
+	}
 }
 
 export function normalizeTelegramReply(value) {
@@ -300,9 +509,11 @@ export async function replyToTelegramMessage(request, response) {
 		const client = await pool.connect();
 		try {
 			await client.query('BEGIN');
-			const inboxMessage = await client.query(`SELECT id,chat_id,status FROM telegram_messages WHERE id=$1 FOR UPDATE`, [messageId]);
+			const inboxMessage = await client.query(`SELECT m.id,m.chat_id,m.status,c.is_sensitive AS "isSensitive"
+				FROM telegram_messages m JOIN telegram_inbox_categories c ON c.code=m.category_code WHERE m.id=$1 FOR UPDATE OF m`, [messageId]);
 			if (!inboxMessage.rowCount) throw Object.assign(new Error('Telegram message was not found.'), { status: 404 });
-			if (inboxMessage.rows[0].status === 'CLOSED') throw Object.assign(new Error('This conversation is closed. Reopen it before replying.'), { status: 409 });
+			if (inboxMessage.rows[0].isSensitive && !actorPermissions(request).has('prayer_requests.respond')) throw Object.assign(new Error('Prayer-request response permission is required.'), { status: 403 });
+			if (['CLOSED','RESOLVED'].includes(inboxMessage.rows[0].status)) throw Object.assign(new Error('This conversation is resolved or closed. Reopen it before replying.'), { status: 409 });
 			const inserted = await client.query(`INSERT INTO telegram_message_replies(telegram_message_id,idempotency_key,reply_text,sent_by)
 				VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id,status`, [messageId,idempotencyKey,replyText,request.user.id]);
 			if (!inserted.rowCount) {
@@ -317,13 +528,20 @@ export async function replyToTelegramMessage(request, response) {
 			} else {
 				replyId = inserted.rows[0].id;
 			}
+			const oldStatus = inboxMessage.rows[0].status;
 			await client.query(`UPDATE telegram_messages SET status='IN_PROGRESS',handled_by=$2,handled_at=NOW() WHERE id=$1`, [messageId,request.user.id]);
+			if (oldStatus !== 'IN_PROGRESS') {
+				await client.query(`INSERT INTO telegram_message_status_history(telegram_message_id,old_status,new_status,changed_by)
+					VALUES($1,$2,'IN_PROGRESS',$3)`, [messageId,oldStatus,request.user.id]);
+			}
 			await client.query('COMMIT');
 			const chatId = inboxMessage.rows[0].chat_id;
 			try {
 				const delivery = await sendTelegramNotification({ chatId, text: replyText });
 				const result = await pool.query(`UPDATE telegram_message_replies SET status='DELIVERED',telegram_delivery_message_id=$2,delivered_at=NOW() WHERE id=$1 RETURNING id,status,reply_text AS "replyText",created_at AS "createdAt",delivered_at AS "deliveredAt"`, [replyId,delivery.messageId]);
 				await pool.query(`UPDATE telegram_messages SET status='REPLIED',handled_by=$2,handled_at=NOW() WHERE id=$1`, [messageId,request.user.id]);
+				await pool.query(`INSERT INTO telegram_message_status_history(telegram_message_id,old_status,new_status,changed_by)
+					VALUES($1,'IN_PROGRESS','REPLIED',$2)`, [messageId,request.user.id]);
 				await audit({ actorUserId:request.user.id,action:'TELEGRAM_INBOX_REPLIED',entityType:'telegram_message',entityId:messageId,after:{replyId:result.rows[0].id,status:'DELIVERED',replyText},ipAddress:clientIp(request) });
 				return response.status(201).json({ success:true,data:result.rows[0] });
 			} catch (error) {
@@ -339,12 +557,59 @@ export async function replyToTelegramMessage(request, response) {
 export async function updateTelegramMessage(request, response) {
 	try {
 		const status = request.body?.status;
-		if (!['NEW','IN_PROGRESS','REPLIED','CLOSED'].includes(status)) throw Object.assign(new Error('Invalid message status.'), { status: 400 });
-		const result = await pool.query(`UPDATE telegram_messages SET status=$2,handled_by=$3,handled_at=NOW() WHERE id=$1 RETURNING id,status`, [request.params.id,status,request.user.id]);
+		const allowedStatuses = ['NEW','IN_REVIEW','IN_PROGRESS','ASSIGNED','AWAITING_RESPONSE','REPLIED','RESOLVED','CLOSED'];
+		if (status !== undefined && !allowedStatuses.includes(status)) throw Object.assign(new Error('Invalid message status.'), { status: 400 });
+		const messageId = Number(request.params.id);
+		if (!Number.isSafeInteger(messageId) || messageId < 1) throw Object.assign(new Error('Telegram message was not found.'), { status: 404 });
+		await assertTelegramMessageAccess(request, messageId);
+		const categoryCode = request.body?.categoryCode;
+		const priority = request.body?.priority;
+		const assignedTo = request.body?.assignedTo;
+		if (priority !== undefined && !['LOW','NORMAL','HIGH','URGENT'].includes(priority)) throw Object.assign(new Error('Invalid message priority.'), { status: 400 });
+		if (categoryCode !== undefined) {
+			const category = await pool.query('SELECT code,is_sensitive AS "isSensitive" FROM telegram_inbox_categories WHERE code=$1', [categoryCode]);
+			if (!category.rowCount) throw Object.assign(new Error('Select a valid message category.'), { status: 400 });
+			if (category.rows[0].isSensitive && !actorPermissions(request).has('prayer_requests.respond')) throw Object.assign(new Error('Prayer-request permission is required to manage this category.'), { status: 403 });
+		}
+		if (assignedTo !== undefined && assignedTo !== null) {
+			const staff = await pool.query(`SELECT DISTINCT u.id FROM users u
+				JOIN user_roles ur ON ur.user_id=u.id
+				JOIN role_permissions rp ON rp.role_id=ur.role_id
+				JOIN permissions p ON p.id=rp.permission_id
+				WHERE u.id=$1 AND u.account_status='ACTIVE'
+				AND p.code IN ('telegram.manage','prayer_requests.respond')`, [assignedTo]);
+			if (!staff.rowCount) throw Object.assign(new Error('Select an active Telegram or prayer-request staff member.'), { status: 400 });
+		}
+		const previous = await pool.query('SELECT status FROM telegram_messages WHERE id=$1', [messageId]);
+		if (!previous.rowCount) throw Object.assign(new Error('Telegram message was not found.'), { status: 404 });
+		const result = await pool.query(`UPDATE telegram_messages SET
+			status=COALESCE($2,status),category_code=COALESCE($3,category_code),priority=COALESCE($4,priority),
+			assigned_to=CASE WHEN $5::boolean THEN $6::bigint ELSE assigned_to END,
+			handled_by=CASE WHEN $2 IS NOT NULL THEN $7 ELSE handled_by END,
+			handled_at=CASE WHEN $2 IS NOT NULL THEN NOW() ELSE handled_at END
+			WHERE id=$1 RETURNING id,status,category_code AS "categoryCode",priority,assigned_to AS "assignedTo"`,
+		[messageId,status ?? null,categoryCode ?? null,priority ?? null,assignedTo !== undefined,assignedTo ?? null,request.user.id]);
 		if (!result.rowCount) return response.status(404).json({ error: 'Telegram message not found.' });
-		await audit({ actorUserId:request.user.id,action:'TELEGRAM_MESSAGE_STATUS_SET',entityType:'telegram_message',entityId:request.params.id,after:result.rows[0],ipAddress:clientIp(request) });
-		return response.json({ success:true,data:result.rows[0] });
-	} catch (error) { return requestError(error,response); }
+		if (status && status !== previous.rows[0].status) await pool.query(`INSERT INTO telegram_message_status_history(telegram_message_id,old_status,new_status,changed_by) VALUES($1,$2,$3,$4)`, [messageId,previous.rows[0].status,status,request.user.id]);
+		await audit({ actorUserId: request.user.id, action: 'TELEGRAM_MESSAGE_UPDATED', entityType: 'telegram_message', entityId: messageId, after: result.rows[0], ipAddress: clientIp(request) });
+		return response.json({ success: true, data: result.rows[0] });
+	} catch (error) { return requestError(error, response); }
+}
+
+export async function addTelegramMessageNote(request, response) {
+	try {
+		const messageId = Number(request.params.id);
+		if (!Number.isSafeInteger(messageId) || messageId < 1) throw Object.assign(new Error('Telegram message was not found.'), { status: 404 });
+		await assertTelegramMessageAccess(request, messageId);
+		const rawNote = request.body?.note;
+		if (typeof rawNote !== 'string' || !rawNote.trim()) throw Object.assign(new Error('Write a private note before saving.'), { status: 400 });
+		const note = rawNote.trim();
+		if (note.length > 4000) throw Object.assign(new Error('Private notes must be 4,000 characters or fewer.'), { status: 400 });
+		const result = await pool.query(`INSERT INTO telegram_message_notes(telegram_message_id,note,created_by)
+			VALUES($1,$2,$3) RETURNING id,note,created_at AS "createdAt"`, [messageId,note,request.user.id]);
+		await audit({ actorUserId: request.user.id, action: 'TELEGRAM_MESSAGE_INTERNAL_NOTE_ADDED', entityType: 'telegram_message', entityId: messageId, after: { noteId: result.rows[0].id }, ipAddress: clientIp(request) });
+		return response.status(201).json({ success: true, data: result.rows[0] });
+	} catch (error) { return requestError(error, response); }
 }
 
 function notificationFail(message, status = 400) {
@@ -513,20 +778,20 @@ ids = [...new Set(ref.map(Number))];
 } else if (type === 'DEPARTMENT') {
 if (!/^\d+$/.test(String(ref)) || Number(ref) < 1) throw notificationFail('audience.ref must be a positive department id for DEPARTMENT.', 400);
 const result = await client.query(`SELECT dm.user_id FROM department_members dm
-JOIN departments d ON d.id=dm.department_id WHERE dm.department_id=$1 AND d.deleted_at IS NULL`, [Number(ref)]);
+JOIN departments d ON d.id=dm.department_id WHERE dm.department_id=$1 AND dm.status='ACTIVE' AND d.deleted_at IS NULL`, [Number(ref)]);
 ids = result.rows.map((row) => row.user_id);
 } else if (type === 'ORGANIZATION') {
 if (!/^\d+$/.test(String(ref)) || Number(ref) < 1) throw notificationFail('audience.ref must be a positive organization id for ORGANIZATION.', 400);
 const result = await client.query(`SELECT DISTINCT dm.user_id FROM department_members dm
 JOIN departments d ON d.id=dm.department_id
 JOIN organizations o ON o.id=d.organization_id
-WHERE o.id=$1 AND o.deleted_at IS NULL AND d.deleted_at IS NULL`, [Number(ref)]);
+WHERE o.id=$1 AND dm.status='ACTIVE' AND o.deleted_at IS NULL AND d.deleted_at IS NULL`, [Number(ref)]);
 ids = result.rows.map((row) => row.user_id);
 } else if (type === 'BIBLE_STUDY_GROUP') {
 if (!/^\d+$/.test(String(ref)) || Number(ref) < 1) throw notificationFail('audience.ref must be a positive Bible study group id.', 400);
 const result = await client.query(`SELECT bsm.user_id FROM bible_study_memberships bsm
 JOIN bible_study_groups g ON g.id=bsm.bible_study_group_id
-WHERE g.id=$1 AND g.deleted_at IS NULL`, [Number(ref)]);
+WHERE g.id=$1 AND bsm.status='ACTIVE' AND g.deleted_at IS NULL`, [Number(ref)]);
 ids = result.rows.map((row) => row.user_id);
 } else if (type === 'ROLE') {
 if (typeof ref !== 'string' || !ref.trim()) throw notificationFail('audience.ref must be a role code for ROLE.', 400);
@@ -544,9 +809,10 @@ return active.rows.map((row) => row.id);
 export async function listWebsiteNotifications(request, response) {
 try {
 const { page, limit, offset } = pageParams(request.query);
-const result = await pool.query(`SELECT n.id,n.title,n.body,n.image_url AS "imageUrl",n.link_url AS "linkUrl",n.email_status AS "status",
+const result = await pool.query(`SELECT n.id,n.title,n.body,n.image_url AS "imageUrl",n.link_url AS "linkUrl",n.notification_status AS "status",
 n.created_at AS "createdAt",u.name AS "recipientName",u.email AS "recipientEmail"
 FROM user_notifications n LEFT JOIN users u ON u.id=n.user_id
+WHERE n.type='WEBSITE' AND n.notification_status <> 'SKIPPED'
 ORDER BY n.created_at DESC LIMIT $1 OFFSET $2`, [limit, offset]);
 return response.json({ success: true, data: result.rows });
 } catch (error) { return requestError(error, response); }
@@ -561,7 +827,16 @@ if (typeof body !== 'string' || !body.trim()) throw notificationFail('Body is re
 const recipientIds = await resolveNotificationAudience(client, audience);
 const cleanTitle = title.trim().slice(0, 200);
 const cleanBody = body.trim().slice(0, 10000);
-const cleanLink = typeof linkUrl === 'string' && linkUrl.trim() ? linkUrl.trim() : null;
+let cleanLink = typeof linkUrl === 'string' && linkUrl.trim() ? linkUrl.trim() : null;
+if (cleanLink && !(cleanLink.startsWith('/') && !cleanLink.startsWith('//') && !cleanLink.includes('\\'))) {
+    try {
+      const parsed = new URL(cleanLink);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error();
+      cleanLink = parsed.href;
+    } catch {
+      throw notificationFail('Link must be a member-side path or a valid HTTPS URL.', 400);
+    }
+}
 const cleanImage = typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
 if (cleanImage) {
   try { if (new URL(cleanImage).protocol !== 'https:') throw new Error(); }
@@ -581,7 +856,7 @@ const batchId = batch.rows[0].id;
 		params.push(userId, cleanTitle, cleanBody, cleanImage, cleanLink, 'PENDING');
 		paramIndex += 6;
 	}
-	if (values.length) await client.query(`INSERT INTO user_notifications(user_id,type,title,body,image_url,link_url,email_status) VALUES ${values.join(',')}`, params);
+	if (values.length) await client.query(`INSERT INTO user_notifications(user_id,type,title,body,image_url,link_url,notification_status) VALUES ${values.join(',')}`, params);
 await audit({ actorUserId: request.user.id, action: 'WEBSITE_NOTIFICATION_SENT', entityType: 'notification_batch', entityId: String(batchId), after: { recipientCount: recipientIds.length, title: cleanTitle, audienceType: audience.type }, ipAddress: clientIp(request) });
 await client.query('COMMIT');
 return response.status(201).json({ success: true, data: { id: batchId, recipientCount: recipientIds.length } });
@@ -592,7 +867,8 @@ export async function archiveWebsiteNotification(request, response) {
 try {
 const notificationId = Number(request.params.id);
 if (!Number.isSafeInteger(notificationId) || notificationId < 1) throw notificationFail('Invalid notification.', 404);
-const result = await pool.query(`UPDATE user_notifications SET email_status='SKIPPED' WHERE id=$1 RETURNING id`, [notificationId]);
+const result = await pool.query(`UPDATE user_notifications SET notification_status='SKIPPED',updated_at=NOW()
+WHERE id=$1 AND type='WEBSITE' RETURNING id`, [notificationId]);
 if (!result.rowCount) return response.status(404).json({ error: 'Notification not found.' });
 await audit({ actorUserId: request.user.id, action: 'WEBSITE_NOTIFICATION_ARCHIVED', entityType: 'user_notification', entityId: String(notificationId), ipAddress: clientIp(request) });
 return response.json({ success: true, data: result.rows[0] });
@@ -631,7 +907,7 @@ const deliveries = await Promise.all(target.rows.map(async (user) => {
     }
     if (channel === 'telegram') {
       if (!user.telegramChatId) return { recipientId: user.id, name: user.name, status: 'SKIPPED', detail: 'No linked Telegram chat.' };
-      const sent = await sendTelegramNotification({ chatId: user.telegramChatId, text: safeImage ? `<b>[TEST] ${cleanSubject}</b>\n\n${testLabel}` : testLabel, photoUrl: safeImage });
+      const sent = await sendTelegramNotification({ chatId: user.telegramChatId, text: `[TEST] ${cleanSubject}\n\n${testLabel}`, photoUrl: safeImage });
       return { recipientId: user.id, name: user.name, status: 'DELIVERED', messageId: sent?.messageId ?? null };
     }
     await pool.query(`INSERT INTO user_notifications(user_id,type,title,body,image_url,link_url,email_status)

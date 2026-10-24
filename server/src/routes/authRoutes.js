@@ -14,7 +14,7 @@ const authLimiter = rateLimit({
 });
 const accountLimiter = rateLimit({
 	windowMs: 15 * 60 * 1000,
-	limit: 6,
+	limit: 9,
 	standardHeaders: 'draft-8',
 	legacyHeaders: false,
 	keyGenerator: (request) => {

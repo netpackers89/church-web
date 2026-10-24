@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { User, Mail, Phone, MapPin, CalendarDays, Languages, Shield, Pencil, Bell, KeyRound } from 'lucide-react';
+import { Mail, Phone, MapPin, CalendarDays, Languages, Shield, Pencil, Bell, KeyRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { userService } from '../../services/api.js';
 import useAsync from '../../hooks/useAsync.js';
@@ -7,6 +7,7 @@ import Button from '../../components/ui/Button.jsx';
 import Badge from '../../components/ui/Badge.jsx';
 import DataState from '../../components/ui/DataState.jsx';
 import { formatGregorian } from '../../utils/formatDate.js';
+import ProfileAvatar from '../../components/ui/ProfileAvatar.jsx';
 
 const LANGUAGE_LABELS = { en: 'English', am: 'Amharic', om: 'Afaan Oromoo', ti: 'Tigrinya' };
 
@@ -36,9 +37,14 @@ export default function MyProfilePage() {
 
             <div className="card card-pad-lg">
               <div className="row" style={{ marginBottom: '1.2rem', gap: '1rem' }}>
-                <span className="brand-mark" style={{ width: '3.4rem', height: '3.4rem', fontSize: '1.2rem' }}>
-                  {(profile.name || 'U').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase()}
-                </span>
+                <ProfileAvatar
+                  src={profile.profileImageUrl || profile.avatarUrl}
+                  name={profile.name}
+                  alt={`${profile.name || 'Member'} profile picture`}
+                  imageClassName="brand-mark"
+                  fallbackClassName="brand-mark"
+                  style={{ width: '3.4rem', height: '3.4rem', fontSize: '1.2rem', objectFit: 'cover' }}
+                />
                 <div>
                   <h2 className="serif" style={{ fontSize: '1.5rem' }}>{profile.name}</h2>
                   <div className="row" style={{ flexWrap: 'wrap', marginTop: '0.3rem' }}>

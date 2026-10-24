@@ -13,8 +13,8 @@ const REPORT_TYPES = [
   { id: 'giving', label: 'Giving summary', icon: HandHeart, note: 'Campaign progress and totals. Finance roles only.' },
 ];
 
-export default function ReportsPage() {
-  const [active, setActive] = useState('members');
+export default function ReportsPage({ embedded = false, initialActive = 'members' }) {
+  const [active, setActive] = useState(initialActive);
 
   const report = useAsync(async () => {
     const res = await adminService.reports(active);
@@ -23,12 +23,12 @@ export default function ReportsPage() {
 
   return (
     <div className="stack-lg">
-      <div className="page-head">
+      {!embedded ? <div className="page-head">
         <div>
           <h1>Reports</h1>
           <p>Operational summaries for church leadership.</p>
         </div>
-      </div>
+      </div> : null}
 
       <div className="chip-row">
         {REPORT_TYPES.map((r) => (

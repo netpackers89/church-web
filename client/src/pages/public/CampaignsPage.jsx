@@ -7,6 +7,7 @@ import ErrorMessage from '../../components/feedback/ErrorMessage.jsx';
 import { formatEventDate } from '../../ethiopianDate.js';
 import Button from '../../components/ui/Button.jsx';
 import { useSettings } from '../../context/SettingsContext.jsx';
+import ReliableImage from '../../components/ui/ReliableImage.jsx';
 
 export default function CampaignsPage() {
   const { calendar } = useSettings();
@@ -34,7 +35,7 @@ export default function CampaignsPage() {
           <div className="grid-auto">
             {campaigns.data.map((c) => (
               <div key={c.id ?? c.title} className="card card-hover">
-                {c.bannerUrl ? <img src={c.bannerUrl} alt="" style={{ width: '100%', height: '11rem', objectFit: 'cover', display: 'block' }} /> : null}
+                {c.bannerUrl ? <ReliableImage src={c.bannerUrl} alt={`${c.title || 'Campaign'} banner`} style={{ width: '100%', height: '11rem', objectFit: 'cover', display: 'block' }} /> : null}
                 <div className="card-body">
                   <div className="row" style={{ alignItems: 'baseline', gap: '0.5rem', marginBottom: '0.5rem' }}>
                     <span className="badge">{c.displayStatus || 'Campaign'}</span>

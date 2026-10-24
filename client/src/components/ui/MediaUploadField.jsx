@@ -2,6 +2,7 @@ import { useCallback, useId, useState } from 'react';
 import { LoaderCircle, Trash2 } from 'lucide-react';
 import Button from './Button.jsx';
 import { useMediaUpload } from '../../hooks/useMediaUpload.js';
+import ReliableImage from './ReliableImage.jsx';
 
 export default function MediaUploadField({
   mediaType = 'BANNER',
@@ -76,7 +77,7 @@ export default function MediaUploadField({
   const currentImage = () =>
     imageUrl ? (
       <>
-        <img src={imageUrl} alt={label} style={{ width: '100%', height: '100%', maxHeight: '16rem', objectFit: 'cover', display: 'block' }} />
+        <ReliableImage src={imageUrl} alt={label} fallback={<span className="muted">Image preview unavailable</span>} style={{ width: '100%', height: '100%', maxHeight: '16rem', objectFit: 'cover', display: 'block' }} />
       </>
     ) : (
       <div style={{ textAlign: 'center', color: '#64748B', padding: '1rem' }}>

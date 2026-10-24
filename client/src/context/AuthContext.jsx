@@ -8,7 +8,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const refreshUser = useCallback(async () => {
+  const refreshUser = useCallback(async ({ throwOnError = false } = {}) => {
     try {
       const response = await api.getAuthIdentity();
       const nextUser = response.data.data ?? null;
@@ -18,6 +18,7 @@ export function AuthProvider({ children }) {
     } catch (failure) {
       setUser(null);
       setError(failure.message || 'Your session could not be restored.');
+      if (throwOnError) throw failure;
       return null;
     }
   }, []);
@@ -45,7 +46,7 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     await api.login({ email, password });
-    const nextUser = await refreshUser();
+    const nextUser = await refreshUser({ throwOnError: true });
     return nextUser;
   }, [refreshUser]);
 

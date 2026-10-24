@@ -13,7 +13,7 @@ export default function NotFoundPage() {
         </p>
         <div className="row" style={{ justifyContent: 'center', marginTop: '1.6rem', flexWrap: 'wrap', gap: '0.7rem' }}>
           <Button to="/" iconRight={Home}>Back home</Button>
-          <Button to="/events" variant="secondary" iconLeft={ArrowLeft}>Browse events</Button>
+          <Button to="/programs" variant="secondary" iconLeft={ArrowLeft}>Browse programs</Button>
         </div>
         <p className="muted" style={{ marginTop: '2rem', fontSize: '0.88rem' }}>
           Need help? <Link to="/contact" style={{ color: 'var(--blue)', fontWeight: 700 }}>Contact the church office</Link>.

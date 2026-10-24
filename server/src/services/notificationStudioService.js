@@ -1,7 +1,7 @@
 import { pool } from '../config/db.js';
 import { config } from '../config/env.js';
-import { sendEmailNotification } from './emailService.js';
-import { sendTelegramNotification } from './telegramService.js';
+import { sendEmailNotification } from '../email/index.js';
+import { sendTelegramNotification } from '../telegram/services/messaging.js';
 import { audit } from './auditService.js';
 
 // Brand palette from the platform specification. Kept here (not in delivery
@@ -271,4 +271,3 @@ export function renderTelegramText({ greeting, body, ctaUrl }) {
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
-

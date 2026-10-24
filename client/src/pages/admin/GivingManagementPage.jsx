@@ -17,7 +17,7 @@ function money(amount, currency = 'ETB') {
   return `${currency} ${Number.isFinite(value) ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}`;
 }
 
-export default function GivingManagementPage() {
+export default function GivingManagementPage({ embedded = false }) {
   const { success } = useToast();
   const [status, setStatus] = useState('PENDING');
   const [version, setVersion] = useState(0);
@@ -69,7 +69,7 @@ export default function GivingManagementPage() {
 
   return (
     <div className="stack-lg">
-      <div className="page-head">
+      {!embedded ? <div className="page-head">
         <div>
           <h1>Contribution verification</h1>
           <p>Review submitted transaction details. Submissions remain pending until an authorized finance decision.</p>
@@ -81,7 +81,7 @@ export default function GivingManagementPage() {
           </select>
           <Button variant="secondary" icon={<RefreshCw size={15} />} onClick={() => setVersion((current) => current + 1)}>Refresh</Button>
         </div>
-      </div>
+      </div> : null}
 
       {error ? <Alert variant="danger">{error}</Alert> : null}
       {queue.loading ? <div className="event-grid">{Array.from({ length: 3 }).map((_, index) => <CardSkeleton key={index} />)}</div>
@@ -104,7 +104,8 @@ export default function GivingManagementPage() {
                   <dl className="giving-review-details">
                     <div><dt>Payment provider</dt><dd><Landmark size={14} /> {record.paymentProvider || 'Provider not recorded'}</dd></div>
                     <div><dt>Transaction reference</dt><dd>{record.paymentReference}</dd></div>
-                    <div><dt>Giving category</dt><dd>{record.categoryName || 'General giving'}</dd></div>
+                    <div><dt>Giving category</dt><dd>{record.categoryName || 'General giving'}{record.otherPurpose ? ` — ${record.otherPurpose}` : ''}</dd></div>
+                    <div><dt>Contribution for</dt><dd>{record.payerMode === 'OTHER' ? `${record.recipientName || 'Named recipient'} · ${record.recipientPhone || 'Phone not provided'}` : record.userName || 'Member'}</dd></div>
                     <div><dt>Campaign</dt><dd>{record.campaignTitle || '—'}</dd></div>
                     <div><dt>Payment date</dt><dd>{record.receivedAt ? new Date(record.receivedAt).toLocaleDateString() : '—'}</dd></div>
                     <div><dt>Submitted</dt><dd>{record.createdAt ? new Date(record.createdAt).toLocaleString() : '—'}</dd></div>

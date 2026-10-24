@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ethiopianDateToGregorian, gregorianDateToEthiopian } from '../src/utils/ethiopianCalendar.js';
+import { ethiopianDateToGregorian, gregorianDateToEthiopian, parseEthiopianDate } from '../src/utils/ethiopianCalendar.js';
 
 test('Gregorian and Ethiopian calendar conversions round-trip at new year and Pagume boundaries', () => {
   const dates = [
@@ -17,4 +17,10 @@ test('Gregorian and Ethiopian calendar conversions round-trip at new year and Pa
 
 test('Gregorian conversion rejects impossible dates', () => {
   assert.throws(() => gregorianDateToEthiopian('2024-02-30'), RangeError);
+});
+
+test('Ethiopian dates accept month names such as 1997 Meskerem 5', () => {
+  const date = parseEthiopianDate('1997 Meskerem 5');
+  assert.deepEqual(date, { year: 1997, month: 1, day: 5 });
+  assert.equal(ethiopianDateToGregorian(date), '2004-09-15');
 });

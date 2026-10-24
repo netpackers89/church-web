@@ -1,0 +1,291 @@
+.account-drawer-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  background: rgb(11 28 43 / 48%);
+}
+
+.account-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 36rem);
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border-left: 1px solid #e5ebef;
+  background: #fff;
+  box-shadow: -12px 0 48px rgb(10 28 44 / 14%);
+  outline: none;
+}
+
+.account-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.5rem 1.5rem 1.2rem;
+  border-bottom: 1px solid #e9eef2;
+}
+
+.account-drawer-eyebrow {
+  color: #667a8b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.account-drawer-header h2 {
+  margin: 0.35rem 0 0;
+  color: #0f3254;
+  font-size: 1.45rem;
+  letter-spacing: -0.025em;
+}
+
+.account-drawer-header p {
+  margin: 0.3rem 0 0;
+  color: #6d7d8a;
+  font-size: 0.86rem;
+}
+
+.account-drawer-close {
+  display: grid;
+  flex: none;
+  width: 2.4rem;
+  height: 2.4rem;
+  place-items: center;
+  border: 1px solid #e1e8ed;
+  border-radius: 0.7rem;
+  background: #fff;
+  color: #344b5f;
+  cursor: pointer;
+}
+
+.account-drawer-close:hover {
+  background: #f4f7f9;
+}
+
+.account-drawer-tabs {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid #e9eef2;
+  background: #fbfcfd;
+}
+
+.account-drawer-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: #5c6f7f;
+  font-size: 0.83rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.account-drawer-tabs button.is-active {
+  border-color: #e0e8ee;
+  background: #fff;
+  color: #0f3254;
+}
+
+.account-drawer-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+.account-drawer-form,
+.account-drawer-sections {
+  display: grid;
+  gap: 1rem;
+}
+
+.account-drawer-sections {
+  gap: 1.2rem;
+}
+
+.account-drawer-photo-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e9eef2;
+}
+
+.account-drawer-photo-row > img,
+.account-drawer-photo-row > span {
+  display: grid;
+  flex: none;
+  width: 3.4rem;
+  height: 3.4rem;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8eff5;
+  color: #0f3254;
+  font-size: 1.05rem;
+  font-weight: 700;
+  object-fit: cover;
+}
+
+.account-drawer-photo-row > div {
+  display: grid;
+  flex: 1;
+  gap: 0.2rem;
+}
+
+.account-drawer-photo-row strong {
+  color: #273e52;
+}
+
+.account-drawer-photo-row small {
+  color: #71808d;
+}
+
+.account-drawer-upload {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.3rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #dce5eb;
+  border-radius: 0.6rem;
+  color: #0f3254;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.account-drawer-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.account-drawer-readonly {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.8rem;
+  border: 1px solid #e6ebef;
+  border-radius: 0.7rem;
+  background: #f8fafb;
+}
+
+.account-drawer-readonly > span,
+.account-drawer-readonly small {
+  color: #6f7f8c;
+  font-size: 0.78rem;
+}
+
+.account-drawer-readonly strong {
+  color: #31485b;
+  font-size: 0.9rem;
+}
+
+.account-drawer-birthdate {
+  display: grid;
+  grid-template-columns: 0.9fr 1.3fr 0.8fr;
+  gap: 0.5rem;
+}
+
+.account-drawer-section-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding-bottom: 0.4rem;
+  color: #0f3254;
+}
+
+.account-drawer-section-title > svg {
+  flex: none;
+  margin-top: 0.1rem;
+}
+
+.account-drawer-section-title h3 {
+  margin: 0;
+  color: #0f3254;
+  font-size: 1rem;
+}
+
+.account-drawer-section-title p {
+  margin: 0.25rem 0 0;
+  color: #71808d;
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.account-drawer-email-form {
+  padding-top: 1.1rem;
+  border-top: 1px solid #e7edf1;
+}
+
+.account-drawer-preference {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  color: #536878;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.account-drawer-preference input {
+  flex: none;
+  margin-top: 0.15rem;
+  accent-color: #0f3254;
+}
+
+.account-drawer-loading {
+  min-height: 12rem;
+  border-radius: 0.8rem;
+  background: linear-gradient(90deg, #f1f4f6, #fafbfc, #f1f4f6);
+  background-size: 200% 100%;
+  animation: account-drawer-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes account-drawer-shimmer {
+  to { background-position: -200% 0; }
+}
+
+@media (max-width: 600px) {
+  .account-drawer {
+    width: 100%;
+    border-left: 0;
+  }
+
+  .account-drawer-header {
+    padding: 1.1rem 1rem 1rem;
+  }
+
+  .account-drawer-tabs {
+    padding-inline: 0.65rem;
+  }
+
+  .account-drawer-tabs button {
+    flex: 1;
+    padding-inline: 0.55rem;
+  }
+
+  .account-drawer-content {
+    padding: 1rem 1rem 1.5rem;
+  }
+}

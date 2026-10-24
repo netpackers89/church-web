@@ -11,6 +11,18 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/favicon_io(3)/apple-touch-icon.png" />
     <link rel="manifest" href="/favicon_io(3)/site.webmanifest" />
     <title>Yeka Abado Mulu Wengel Church</title>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('church_theme_pref');
+        const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.dataset.theme = savedTheme === 'dark'
+          || (savedTheme === 'system' && systemDark)
+          ? 'dark'
+          : 'light';
+      } catch {
+        document.documentElement.dataset.theme = 'light';
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

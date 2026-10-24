@@ -1,4 +1,4 @@
-import { CalendarDays, LibraryBig, Plus } from 'lucide-react';
+import { CalendarDays, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { adminService, unwrap } from '../../services/api.js';
 import useAsync from '../../hooks/useAsync.js';
@@ -107,7 +107,6 @@ export default function EventsManagementPage() {
           <p>Manage one-time events and regular programs. Published events appear on the church calendar.</p>
         </div>
         <div className="page-actions">
-          <Button to="/admin/program-library" variant="secondary" iconLeft={<LibraryBig size={15} />}>Regular programs</Button>
           <Button iconRight={<Plus size={15} />} onClick={openNew}>New event</Button>
         </div>
       </div>

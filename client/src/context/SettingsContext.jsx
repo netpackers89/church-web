@@ -26,11 +26,17 @@ export function SettingsProvider({ children }) {
   const [language, setLanguage] = useState(() => user?.preferredLanguage || 'en');
   const [theme, setThemeState] = useState(() => {
     try {
-      return localStorage.getItem(THEME_STORAGE_KEY) || 'system';
+      return localStorage.getItem(THEME_STORAGE_KEY) || 'light';
     } catch {
-      return 'system';
+      return 'light';
     }
   });
+  const [systemTheme, setSystemTheme] = useState(() => (
+    typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light'
+  ));
   const [timezone] = useState(() => {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -47,18 +53,20 @@ export function SettingsProvider({ children }) {
   }, [user, language]);
 
   const isEthiopian = calendar === 'ethiopian';
+  const resolvedTheme = theme === 'system' ? systemTheme : theme;
 
   useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const applyTheme = () => {
-      const resolved = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme;
-      document.documentElement.dataset.theme = resolved;
-    };
-    applyTheme();
-    if (theme !== 'system') return undefined;
-    media.addEventListener?.('change', applyTheme);
-    return () => media.removeEventListener?.('change', applyTheme);
-  }, [theme]);
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return undefined;
+    const updateSystemTheme = () => setSystemTheme(media.matches ? 'dark' : 'light');
+    media.addEventListener?.('change', updateSystemTheme);
+    return () => media.removeEventListener?.('change', updateSystemTheme);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.style.colorScheme = resolvedTheme;
+  }, [resolvedTheme]);
 
   const setTheme = useCallback((nextTheme) => {
     if (!['light', 'dark', 'system'].includes(nextTheme)) return;
@@ -86,8 +94,8 @@ export function SettingsProvider({ children }) {
   }, [isEthiopian]);
 
   const value = useMemo(
-    () => ({ calendar, isEthiopian, toggleCalendar, language, setLanguage, timezone, theme, setTheme }),
-    [calendar, isEthiopian, toggleCalendar, language, timezone, theme, setTheme],
+    () => ({ calendar, isEthiopian, toggleCalendar, language, setLanguage, timezone, theme, resolvedTheme, setTheme }),
+    [calendar, isEthiopian, toggleCalendar, language, timezone, theme, resolvedTheme, setTheme],
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
@@ -98,4 +106,3 @@ export function useSettings() {
   if (!ctx) throw new Error('useSettings must be used within a SettingsProvider');
   return ctx;
 }
-

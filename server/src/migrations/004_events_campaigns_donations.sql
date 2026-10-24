@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS event_registrations (
 );
 
 -- ----------------------------------------------------------------------------
+-- donation_categories
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS donation_categories (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    description TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_is_active ON donation_categories(is_active);
+
+-- ----------------------------------------------------------------------------
 -- fundraising_campaigns
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fundraising_campaigns (
@@ -63,21 +78,6 @@ CREATE TABLE IF NOT EXISTS fundraising_campaigns (
 
 CREATE INDEX IF NOT EXISTS idx_campaigns_status ON fundraising_campaigns(status);
 CREATE INDEX IF NOT EXISTS idx_campaigns_category_id ON fundraising_campaigns(category_id);
-
--- ----------------------------------------------------------------------------
--- donation_categories
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS donation_categories (
-    id BIGSERIAL PRIMARY KEY,
-    name VARCHAR(120) NOT NULL,
-    description TEXT,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_by BIGINT REFERENCES users(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_categories_is_active ON donation_categories(is_active);
 
 -- ----------------------------------------------------------------------------
 -- donations

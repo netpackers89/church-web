@@ -1,5 +1,5 @@
 import { pool } from '../config/db.js';
-import { sendEmailNotification } from './emailService.js';
+import { sendEmailNotification } from '../email/index.js';
 
 function eventMessage(event) {
 	const when = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Addis_Ababa' }).format(new Date(event.startAt));

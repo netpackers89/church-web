@@ -11,7 +11,7 @@ export default function OrganizationDetailsPage() {
 
   return (
     <div className="stack-lg">
-      <Link to="/me/organizations" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }}>
+      <Link to="/ministries" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }}>
         <ArrowLeft size={14} /> All organizations
       </Link>
 

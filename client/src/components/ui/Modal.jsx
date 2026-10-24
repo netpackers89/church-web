@@ -24,7 +24,28 @@ export default function Modal({ open, onClose, title, description, children, foo
     lastActive.current = document.activeElement;
     panelRef.current?.focus();
     const onKey = (e) => {
-      if (e.key === 'Escape') onCloseRef.current?.();
+      if (e.key === 'Escape') {
+        onCloseRef.current?.();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = [...(panelRef.current?.querySelectorAll(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      ) ?? [])].filter((element) => element.getAttribute('aria-hidden') !== 'true');
+      if (!focusable.length) {
+        e.preventDefault();
+        panelRef.current?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === panelRef.current)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     const prevOverflow = document.body.style.overflow;
@@ -41,7 +62,7 @@ export default function Modal({ open, onClose, title, description, children, foo
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onCloseRef.current?.()}>
       <div
-        className={`modal ${size === 'lg' ? 'modal-lg' : ''}`}
+        className={`modal ${size === 'lg' ? 'modal-lg' : ''}${size === 'full' ? 'modal-full' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -86,4 +107,3 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, message, confir
     </Modal>
   );
 }
-

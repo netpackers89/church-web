@@ -1,14 +1,21 @@
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
 import { pool } from '../config/db.js';
 import { config } from '../config/env.js';
 import { requestError, requiredString } from '../utils/http.js';
-import { isSafeImageUrl, uploadImageToImgbb } from '../services/imgbbService.js';
+import { isSafeImageUrl, uploadImageToImgbb, validateImageFile } from '../services/imgbbService.js';
 
-const VALID_MEDIA_TYPES = new Set(['BANNER', 'FLYER', 'ANNOUNCEMENT', 'CAMPAIGN', 'GALLERY', 'SERMON', 'EVENT', 'IMAGE']);
+const currentDirectory = dirname(fileURLToPath(import.meta.url));
+const uploadsDirectory = resolve(currentDirectory, '../../public/uploads');
+
+const VALID_MEDIA_TYPES = new Set(['BANNER', 'FLYER', 'ANNOUNCEMENT', 'CAMPAIGN', 'GALLERY', 'SERMON', 'EVENT', 'IMAGE', 'LOGO', 'PROFILE', 'DOCUMENT']);
 
 function normalizeMediaType(value) {
-  const type = typeof value === 'string' ? value.trim().toUpperCase() : 'BANNER';
+  const type = typeof value === 'string' ? value.trim().toUpperCase() : 'IMAGE';
   if (!VALID_MEDIA_TYPES.has(type)) {
-    throw Object.assign(new Error('Unsupported media type.'), { status: 400 });
+    return 'IMAGE';
   }
   return type;
 }
@@ -16,9 +23,19 @@ function normalizeMediaType(value) {
 function normalizeMediaUrl(value) {
   const imageUrl = typeof value === 'string' ? value.trim() : '';
   if (!isSafeImageUrl(imageUrl, config.mediaAllowedHosts)) {
-    throw Object.assign(new Error('Use a valid HTTPS image URL from an approved media host.'), { status: 400 });
+    throw Object.assign(new Error('Use a valid image URL from an approved media host or storage.'), { status: 400 });
   }
   return imageUrl;
+}
+
+async function saveFileLocally(file) {
+  await mkdir(uploadsDirectory, { recursive: true });
+  const ext = (file.mimetype === 'image/png' ? '.png' : file.mimetype === 'image/webp' ? '.webp' : file.mimetype === 'image/gif' ? '.gif' : '.jpg') || extname(file.originalname || '') || '.jpg';
+  const filename = `${Date.now()}-${randomBytes(8).toString('hex')}${ext}`;
+  const filePath = resolve(uploadsDirectory, filename);
+  await writeFile(filePath, Buffer.from(file.buffer || file));
+  const publicUrl = `/uploads/${filename}`;
+  return { url: publicUrl, storageId: filename, storageProvider: 'local' };
 }
 
 export async function uploadMedia(request, response) {
@@ -26,19 +43,31 @@ export async function uploadMedia(request, response) {
     if (!request.file) {
       throw Object.assign(new Error('Select an image file to upload.'), { status: 400 });
     }
-    if (!config.imgbbApiKey) {
-      throw Object.assign(new Error('Image uploads are not configured. Set IMGBB_API_KEY in the server environment.'), { status: 500 });
+    validateImageFile(request.file);
+
+    let uploaded = null;
+    if (config.imgbbApiKey && config.imgbbApiKey.trim()) {
+      try {
+        const imgbbResult = await uploadImageToImgbb(request.file, config.imgbbApiKey, config.mediaAllowedHosts);
+        uploaded = { ...imgbbResult, storageProvider: 'imgbb' };
+      } catch (imgbbError) {
+        console.warn('[media] ImgBB upload failed, falling back to local persistent storage:', imgbbError.message);
+      }
     }
-    const uploaded = await uploadImageToImgbb(request.file, config.imgbbApiKey, config.mediaAllowedHosts);
+
+    if (!uploaded) {
+      uploaded = await saveFileLocally(request.file);
+    }
+
     const type = normalizeMediaType(request.body?.type);
-    const title = requiredString(request.body?.title || request.file.originalname.replace(/\.[^.]+$/, ''), 'Title', 200);
+    const title = requiredString(request.body?.title || request.file.originalname?.replace(/\.[^.]+$/, '') || 'Uploaded Image', 'Title', 200);
     const isThumbnail = request.body?.isThumbnail === 'true';
     const result = await pool.query(
       `INSERT INTO media_items(type, title, media_url, thumbnail_url, storage_provider, storage_id, is_thumbnail, is_public, created_by, created_at, updated_at)
-       VALUES ($1, $2, $3, CASE WHEN $5 THEN $3 ELSE NULL END, 'imgbb', $4, $5, FALSE, $6, NOW(), NOW())
+       VALUES ($1, $2, $3, CASE WHEN $6 THEN $3 ELSE NULL END, $4, $5, $6, FALSE, $7, NOW(), NOW())
        RETURNING id, media_url AS "mediaUrl", storage_provider AS "storageProvider", storage_id AS "storageId",
        thumbnail_url AS "thumbnailUrl", is_thumbnail AS "isThumbnail"`,
-      [type, title, uploaded.url, uploaded.storageId, isThumbnail, request.user.id],
+      [type, title, uploaded.url, uploaded.storageProvider, uploaded.storageId, isThumbnail, request.user.id],
     );
     return response.status(201).json({ success: true, data: { ...result.rows[0], url: uploaded.url, imageUrl: uploaded.url } });
   } catch (error) {

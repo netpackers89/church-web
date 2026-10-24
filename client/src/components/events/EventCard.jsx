@@ -4,6 +4,7 @@ import { MapPin, ArrowRight, CalendarDays, Clock3, X } from 'lucide-react';
 import { useSettings } from '../../context/SettingsContext.jsx';
 import { eventYearMonth, formatEventDate } from '../../utils/formatDate.js';
 import Button from '../ui/Button.jsx';
+import ReliableImage from '../ui/ReliableImage.jsx';
 import fallbackEvent from '../../assets/hero.png';
 
 /**
@@ -46,11 +47,11 @@ export default function EventCard({ event }) {
   return (
     <article className="card card-hover event-card">
       <div className="event-media">
-        <img
+        <ReliableImage
           src={event.imageUrl || event.bannerUrl || fallbackEvent}
           alt={event.title ? `${event.title} event banner` : 'Event banner'}
           loading="lazy"
-          onError={(e) => { e.currentTarget.src = fallbackEvent; }}
+          fallback={<img src={fallbackEvent} alt={event.title ? `${event.title} event banner` : 'Event banner'} />}
         />
         {day ? (
           <span className="event-date" aria-hidden="true">
@@ -95,7 +96,7 @@ export default function EventCard({ event }) {
             <X size={19} aria-hidden="true" />
           </button>
           <div className="event-quick-image">
-            <img src={event.imageUrl || event.bannerUrl || fallbackEvent} alt={event.title ? `${event.title} event banner` : 'Event banner'} onError={(imageEvent) => { imageEvent.currentTarget.src = fallbackEvent; }} />
+            <ReliableImage src={event.imageUrl || event.bannerUrl || fallbackEvent} alt={event.title ? `${event.title} event banner` : 'Event banner'} fallback={<img src={fallbackEvent} alt={event.title ? `${event.title} event banner` : 'Event banner'} />} />
             <span className={`event-status event-status-${status.toLowerCase().replaceAll(' ', '-')}`}>{status}</span>
           </div>
           <div className="event-quick-body">
@@ -146,4 +147,3 @@ function formatCountdown(milliseconds) {
   if (minutes) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
 }
-

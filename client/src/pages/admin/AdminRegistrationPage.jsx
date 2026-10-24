@@ -1,16 +1,13 @@
 import { useState } from 'react';
-import { LibraryBig } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import AdminStaffRegistrationForm from './AdminStaffRegistrationForm.jsx';
-import { BibleStudyGroupRegistrationForm, DepartmentRegistrationForm, OrganizationRegistrationForm } from './RegistrationForms.jsx';
+import { BibleStudyGroupRegistrationForm, DepartmentRegistrationForm } from './RegistrationForms.jsx';
 import { usePermissions } from '../../hooks/usePermission.js';
 import Button from '../../components/ui/Button.jsx';
-
 
 const MODES = [
   { id: 'staff', label: 'Register Staff Account', permissions: ['users.create', 'roles.manage'] },
   { id: 'department', label: 'Register Department', permission: 'staff.manage' },
-  { id: 'organization', label: 'Create Organization', permission: 'staff.manage' },
   { id: 'bible-study-group', label: 'Register Bible Study Group', permission: 'programs.manage' },
 ];
 
@@ -38,9 +35,6 @@ export default function AdminRegistrationPage() {
           <h1>Registrations</h1>
           <p>Choose one registration workflow. Each action writes to the same records used across church workspaces.</p>
         </div>
-        {permissions.has('programs.manage') ? <div className="page-actions">
-          <Button to="/admin/program-library" variant="secondary" iconLeft={<LibraryBig size={16} />}>Create master program</Button>
-        </div> : null}
       </div>
 
       <div className="reg-tabs" role="tablist" aria-label="Registration type">
@@ -62,8 +56,6 @@ export default function AdminRegistrationPage() {
         {activeMode === 'staff' && <AdminStaffRegistrationForm />}
 
         {activeMode === 'department' && <DepartmentRegistrationForm />}
-
-        {activeMode === 'organization' && <OrganizationRegistrationForm />}
 
         {activeMode === 'bible-study-group' && <BibleStudyGroupRegistrationForm />}
       </div>
