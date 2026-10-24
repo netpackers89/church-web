@@ -50,14 +50,29 @@ test('requires TLS and certificate verification in production, including sslmode
   assert.equal(options.ssl.rejectUnauthorized, true);
 });
 
-test('rejects production database configuration that disables TLS or certificate verification', () => {
+test('allows the explicit self-signed certificate exception only with sslmode=require in production', () => {
+  const options = buildPoolOptions({
+    ...baseDatabase,
+    production: true,
+    sslRejectUnauthorized: false,
+  });
+
+  assert.equal(options.ssl.rejectUnauthorized, false);
+  assert.throws(
+    () => buildPoolOptions({
+      ...baseDatabase,
+      production: true,
+      sslRejectUnauthorized: false,
+      url: 'postgres://db.example.test/church?sslmode=verify-full',
+    }),
+    /can only be disabled for an explicit sslmode=require connection/,
+  );
+});
+
+test('rejects production database configuration that disables TLS', () => {
   assert.throws(
     () => buildPoolOptions({ ...baseDatabase, production: true, url: 'postgres://db.example.test/church?sslmode=disable' }),
     /TLS cannot be disabled in production/,
-  );
-  assert.throws(
-    () => buildPoolOptions({ ...baseDatabase, production: true, sslRejectUnauthorized: false }),
-    /certificate verification cannot be disabled in production/,
   );
 });
 

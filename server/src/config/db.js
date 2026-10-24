@@ -29,17 +29,15 @@ export function buildPoolOptions(database) {
 	if (production && (database.ssl === false || urlSslMode === 'disable')) {
 		throw new Error('PostgreSQL TLS cannot be disabled in production.');
 	}
-	if (production && database.sslRejectUnauthorized === false) {
-		throw new Error('PostgreSQL certificate verification cannot be disabled in production.');
+	if (production && database.sslRejectUnauthorized === false && urlSslMode !== 'require') {
+		throw new Error('PostgreSQL certificate verification can only be disabled for an explicit sslmode=require connection.');
 	}
 
 	const sslEnabled = production || (database.ssl ?? Boolean(urlSslMode && urlSslMode !== 'disable'));
 	const sslRootCert = database.sslRootCert || urlRootCert;
 	const ssl = sslEnabled
 		? {
-			rejectUnauthorized: production
-				? true
-				: (database.sslRejectUnauthorized ?? urlSslMode !== 'require'),
+			rejectUnauthorized: database.sslRejectUnauthorized ?? (production || urlSslMode !== 'require'),
 			...(sslRootCert ? { ca: readFileSync(sslRootCert, 'utf8') } : {}),
 			...(urlCertificate ? { cert: readFileSync(urlCertificate, 'utf8') } : {}),
 			...(urlPrivateKey ? { key: readFileSync(urlPrivateKey, 'utf8') } : {}),
